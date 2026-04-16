@@ -43,7 +43,12 @@ function getLabelNames(rawLabels: unknown): string[] {
 function extractModule(rawLabels: unknown): string {
   const labels = getLabelNames(rawLabels);
   const moduleLabel = labels.find((label) => label.startsWith("module:"));
-  return moduleLabel ? moduleLabel.slice("module:".length) : "unknown";
+  if (!moduleLabel) {
+    return "unknown";
+  }
+
+  const moduleValue = moduleLabel.slice("module:".length).trim();
+  return moduleValue.length > 0 ? moduleValue : "unknown";
 }
 
 function isBugLabeled(rawLabels: unknown): boolean {

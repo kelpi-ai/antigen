@@ -71,6 +71,42 @@ describe("POST /webhooks/linear", () => {
     });
   });
 
+  it("trims whitespace from module labels", async () => {
+    const app = new Hono();
+    mountLinearWebhook(app);
+
+    const body = JSON.stringify({
+      action: "create",
+      type: "Issue",
+      data: {
+        id: "lin_123",
+        identifier: "BUG-42",
+        url: "https://linear.app/acme/issue/BUG-42",
+        labels: [{ name: "bug" }, { name: "module: checkout" }],
+      },
+    });
+
+    const res = await app.request("/webhooks/linear", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "linear-signature": sign(body, secret),
+      },
+      body,
+    });
+
+    expect(res.status).toBe(202);
+    expect(sendMock).toHaveBeenCalledWith({
+      name: "linear/ticket.created",
+      data: {
+        ticketId: "lin_123",
+        identifier: "BUG-42",
+        module: "checkout",
+        url: "https://linear.app/acme/issue/BUG-42",
+      },
+    });
+  });
+
   it("returns 401 for an invalid signature", async () => {
     const app = new Hono();
     mountLinearWebhook(app);

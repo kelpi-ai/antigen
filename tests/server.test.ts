@@ -40,4 +40,18 @@ describe("server", () => {
     );
     expect(body.function_count).toBeGreaterThanOrEqual(1);
   });
+
+  it("mounts POST /webhooks/linear", async () => {
+    const app = buildApp();
+    const res = await app.request("/webhooks/linear", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "linear-signature": "invalid-signature",
+      },
+      body: "{}",
+    });
+
+    expect(res.status).toBe(401);
+  });
 });
