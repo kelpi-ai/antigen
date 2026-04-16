@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { env } from "../config/env";
 
 export interface CodexResult {
   stdout: string;
@@ -14,8 +13,10 @@ export interface InvokeOpts {
 
 export function invokeCodex(prompt: string, opts: InvokeOpts = {}): Promise<CodexResult> {
   return new Promise((resolve, reject) => {
+    const codexBin = process.env.CODEX_BIN || "codex";
+
     const proc = spawn(
-      env.CODEX_BIN,
+      codexBin,
       ["exec", "--full-auto", prompt],
       { stdio: ["ignore", "pipe", "pipe"], cwd: opts.cwd },
     );

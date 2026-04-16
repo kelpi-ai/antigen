@@ -80,4 +80,18 @@ describe("loadEnv", () => {
 
     expect(() => loadEnv()).toThrow(/INNGEST_EVENT_KEY/);
   });
+
+  it("throws when a newly required localhost variable is missing", () => {
+    process.env.INNGEST_EVENT_KEY = "test-key";
+    process.env.INNGEST_SIGNING_KEY = "signkey_test";
+    delete process.env.OPENAI_API_KEY;
+    process.env.TARGET_APP_URL = "https://app.internal";
+    process.env.SENTRY_WEBHOOK_SECRET = "sentry-webhook-secret";
+    process.env.LINEAR_API_KEY = "linear-api-key";
+    process.env.LINEAR_WEBHOOK_SECRET = "linear-webhook-secret";
+    process.env.TARGET_REPO_PATH = "/tmp/target-repo";
+    process.env.TARGET_REPO_WORKTREE_ROOT = "/tmp/worktrees";
+
+    expect(() => loadEnv()).toThrow(/OPENAI_API_KEY/);
+  });
 });

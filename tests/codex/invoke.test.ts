@@ -45,6 +45,17 @@ describe("invokeCodex", () => {
     );
   });
 
+  it("falls back to codex binary when CODEX_BIN is unset", async () => {
+    delete process.env.CODEX_BIN;
+    spawnMock.mockReturnValue(fakeProc({ stdout: "done", exitCode: 0 }));
+    await invokeCodex("reproduce issue 123");
+    expect(spawnMock).toHaveBeenCalledWith(
+      "codex",
+      ["exec", "--full-auto", "reproduce issue 123"],
+      expect.objectContaining({ stdio: ["ignore", "pipe", "pipe"] }),
+    );
+  });
+
   it("resolves with stdout on exit 0", async () => {
     spawnMock.mockReturnValue(fakeProc({ stdout: "ok-output", exitCode: 0 }));
     const result = await invokeCodex("hello");
