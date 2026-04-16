@@ -18,6 +18,10 @@ describe("fixer", () => {
   });
 
   describe("parseFixerResult", () => {
+    it("throws when FIXER_RESULT line is missing", () => {
+      expect(() => parseFixerResult("some preamble\nno result here")).toThrow(/missing FIXER_RESULT line/);
+    });
+
     it("parses FIXER_RESULT JSON from stdout", () => {
       const stdout = [
         "some preamble",
