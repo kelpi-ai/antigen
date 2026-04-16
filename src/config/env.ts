@@ -4,6 +4,11 @@ const EnvSchema = z.object({
   INNGEST_EVENT_KEY: z.string().min(1),
   INNGEST_SIGNING_KEY: z.string().min(1),
   CODEX_BIN: z.string().min(1),
+  GITHUB_WEBHOOK_SECRET: z.string().min(1),
+  CHROME_PATH: z.string().min(1),
+  ARTIFACTS_DIR: z.string().min(1).default(".incident-loop-artifacts"),
+  MAX_SCENARIOS_PER_PR: z.coerce.number().int().positive().default(5),
+  P3_EXECUTOR_CONCURRENCY: z.coerce.number().int().positive().default(2),
   PORT: z.coerce.number().int().positive().default(3000),
 });
 
