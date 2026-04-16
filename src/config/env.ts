@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+const optionalTrimmedString = z.preprocess(
+  (value) => (value === "" ? undefined : value),
+  z.string().min(1).optional(),
+);
+
 const EnvSchema = z.object({
   INNGEST_EVENT_KEY: z.string().min(1),
   INNGEST_SIGNING_KEY: z.string().min(1),
@@ -8,8 +13,8 @@ const EnvSchema = z.object({
   SENTRY_WEBHOOK_SECRET: z.string().min(1),
   LINEAR_API_KEY: z.string().min(1),
   ARTIFACTS_DIR: z.string().min(1).default(".incident-loop-artifacts"),
-  CHROME_PATH: z.string().min(1).optional(),
-  FFMPEG_BIN: z.string().min(1).optional(),
+  CHROME_PATH: optionalTrimmedString,
+  FFMPEG_BIN: optionalTrimmedString,
   PORT: z.coerce.number().int().positive().default(3000),
 });
 

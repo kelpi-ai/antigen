@@ -61,4 +61,19 @@ describe("loadEnv", () => {
     expect(env.TARGET_APP_URL).toBe("http://localhost:3001");
     expect(env.ARTIFACTS_DIR).toBe(".incident-loop-artifacts");
   });
+
+  it("treats blank browser/ffmpeg paths as unset", () => {
+    process.env.INNGEST_EVENT_KEY = "x";
+    process.env.INNGEST_SIGNING_KEY = "x";
+    process.env.OPENAI_API_KEY = "sk-test";
+    process.env.TARGET_APP_URL = "http://localhost:3001";
+    process.env.SENTRY_WEBHOOK_SECRET = "sentry-secret";
+    process.env.LINEAR_API_KEY = "lin_api_xxx";
+    process.env.CHROME_PATH = "";
+    process.env.FFMPEG_BIN = "";
+
+    const env = loadEnv();
+    expect(env.CHROME_PATH).toBeUndefined();
+    expect(env.FFMPEG_BIN).toBeUndefined();
+  });
 });
