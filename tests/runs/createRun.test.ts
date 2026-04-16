@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createRun } from "../../src/runs/createRun";
@@ -14,12 +14,17 @@ describe("createRun", () => {
     });
 
     expect(run.runId).toMatch(/^[a-f0-9-]+$/);
-    expect(run.runDir).toContain(root);
-    expect(run.videoPath.endsWith("browser.mp4")).toBe(true);
-    expect(run.metadataPath.endsWith("metadata.json")).toBe(true);
+    expect(run.runDir).toBe(join(root, "runs", run.runId));
+    expect(run.codexDir).toBe(join(run.runDir, ".codex"));
+    expect(run.videoPath).toBe(join(run.runDir, "browser.mp4"));
+    expect(run.metadataPath).toBe(join(run.runDir, "metadata.json"));
+    expect((await stat(run.codexDir)).isDirectory()).toBe(true);
 
     const metadata = JSON.parse(await readFile(run.metadataPath, "utf8"));
     expect(metadata.status).toBe("created");
     expect(metadata.sentryIssueId).toBe("SENTRY-123");
+    expect(metadata.runId).toBe(run.runId);
+    expect(metadata.targetAppUrl).toBe("http://localhost:3001");
+    expect(metadata.videoPath).toBe(run.videoPath);
   });
 });
