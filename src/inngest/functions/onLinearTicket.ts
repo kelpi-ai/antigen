@@ -28,6 +28,7 @@ export async function runLinearTicketFlow({
   await step.run("update-checkout", () => updateCheckout());
 
   const worktree = await step.run("create-worktree", () => createWorktree(ticket.identifier));
+  let primaryError: unknown;
 
   try {
     const prompt = await step.run("build-prompt", () =>
@@ -45,9 +46,24 @@ export async function runLinearTicketFlow({
         cwd: worktree.path,
       }),
     );
+  } catch (error) {
+    primaryError = error;
   } finally {
-    await step.run("remove-worktree", () => removeWorktree(worktree.path));
+    try {
+      await step.run("remove-worktree", () => removeWorktree(worktree.path));
+    } catch (cleanupError) {
+      if (primaryError) {
+        throw new AggregateError([primaryError as Error, cleanupError as Error], "flow failed and cleanup failed");
+      }
+      throw cleanupError;
+    }
   }
+
+  if (primaryError) {
+    throw primaryError;
+  }
+
+  throw new Error("linear ticket flow exited without result");
 }
 
 export const onLinearTicket = inngest.createFunction(

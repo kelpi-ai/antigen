@@ -1,11 +1,23 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-const { fetchTicketContextMock, updateCheckoutMock, createWorktreeMock, removeWorktreeMock, runFixerMock } = vi.hoisted(() => ({
+const {
+  buildFixerPromptMock,
+  fetchTicketContextMock,
+  updateCheckoutMock,
+  createWorktreeMock,
+  removeWorktreeMock,
+  runFixerMock,
+} = vi.hoisted(() => ({
+  buildFixerPromptMock: vi.fn(),
   fetchTicketContextMock: vi.fn(),
   updateCheckoutMock: vi.fn(),
   createWorktreeMock: vi.fn(),
   removeWorktreeMock: vi.fn(),
   runFixerMock: vi.fn(),
+}));
+
+vi.mock("../../src/prompts/fixer", () => ({
+  buildFixerPrompt: buildFixerPromptMock,
 }));
 
 vi.mock("../../src/linear/fetchTicketContext", () => ({
@@ -25,7 +37,7 @@ vi.mock("../../src/codex/fixer", () => ({
   runFixer: runFixerMock,
 }));
 
-import { functions, } from "../../src/inngest";
+import { functions } from "../../src/inngest";
 import { onLinearTicket, runLinearTicketFlow } from "../../src/inngest/functions/onLinearTicket";
 
 interface StepLike {
@@ -92,6 +104,7 @@ describe("onLinearTicket", () => {
     fetchTicketContextMock.mockReset();
     updateCheckoutMock.mockReset();
     createWorktreeMock.mockReset();
+    buildFixerPromptMock.mockReset();
     removeWorktreeMock.mockReset();
     runFixerMock.mockReset();
   });
@@ -121,6 +134,7 @@ describe("onLinearTicket", () => {
       path: "/tmp/wt/ABC-1-abcd",
       branch: "fix/ABC-1-abcd",
     });
+    buildFixerPromptMock.mockReturnValue("prompt-body");
     runFixerMock.mockResolvedValue(result);
 
     const actual = await runLinearTicketFlow({
@@ -137,12 +151,15 @@ describe("onLinearTicket", () => {
       "run-fixer",
       "remove-worktree",
     ]);
+    expect(buildFixerPromptMock).toHaveBeenCalledWith(
+      expect.objectContaining({ targetAppUrl: "http://localhost:3001" }),
+    );
     expect(removeWorktreeMock).toHaveBeenCalledWith("/tmp/wt/ABC-1-abcd");
     expect(runFixerMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        prompt: expect.stringContaining("ABC-1"),
+      {
+        prompt: "prompt-body",
         cwd: "/tmp/wt/ABC-1-abcd",
-      }),
+      },
     );
   });
 
@@ -185,5 +202,65 @@ describe("onLinearTicket", () => {
       "remove-worktree",
     ]);
     expect(removeWorktreeMock).toHaveBeenCalledWith("/tmp/wt/ABC-1-efgh");
+  });
+
+  it("removes the worktree when prompt generation fails", async () => {
+    const { steps, step } = createStepRecorder();
+
+    fetchTicketContextMock.mockResolvedValue(ticketContext);
+    updateCheckoutMock.mockResolvedValue(undefined);
+    createWorktreeMock.mockResolvedValue({
+      path: "/tmp/wt/ABC-1-ijkl",
+      branch: "fix/ABC-1-ijkl",
+    });
+    buildFixerPromptMock.mockRejectedValue(new Error("prompt failed"));
+
+    await expect(
+      runLinearTicketFlow({ event: { data: ticket }, step }),
+    ).rejects.toThrow(/prompt failed/);
+
+    expect(steps).toEqual([
+      "fetch-ticket-context",
+      "update-checkout",
+      "create-worktree",
+      "build-prompt",
+      "remove-worktree",
+    ]);
+    expect(removeWorktreeMock).toHaveBeenCalledWith("/tmp/wt/ABC-1-ijkl");
+  });
+
+  it("keeps the original failure when cleanup also fails", async () => {
+    const { steps, step } = createStepRecorder();
+
+    fetchTicketContextMock.mockResolvedValue(ticketContext);
+    updateCheckoutMock.mockResolvedValue(undefined);
+    createWorktreeMock.mockResolvedValue({
+      path: "/tmp/wt/ABC-1-mnop",
+      branch: "fix/ABC-1-mnop",
+    });
+    buildFixerPromptMock.mockResolvedValue("prompt-body");
+    runFixerMock.mockRejectedValue(new Error("fixer failed"));
+    removeWorktreeMock.mockRejectedValue(new Error("cleanup failed"));
+
+    try {
+      await runLinearTicketFlow({ event: { data: ticket }, step });
+      expect.fail("expected runLinearTicketFlow to throw");
+    } catch (error) {
+      const aggregate = error as AggregateError;
+      expect(aggregate).toBeInstanceOf(AggregateError);
+      const messages = aggregate.errors.map((value) =>
+        value instanceof Error ? value.message : String(value),
+      );
+      expect(messages).toEqual(expect.arrayContaining(["fixer failed", "cleanup failed"]));
+    }
+
+    expect(steps).toEqual([
+      "fetch-ticket-context",
+      "update-checkout",
+      "create-worktree",
+      "build-prompt",
+      "run-fixer",
+      "remove-worktree",
+    ]);
   });
 });
