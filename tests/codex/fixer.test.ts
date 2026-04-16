@@ -25,7 +25,7 @@ describe("fixer", () => {
     it("parses FIXER_RESULT JSON from stdout", () => {
       const stdout = [
         "some preamble",
-        'FIXER_RESULT {"status":"ok","prUrl":"https://example.test/pr/1","testPath":"tests/fix.spec.ts","redEvidence":"red","greenEvidence":"green","regressionGuardEvidence":"guard"}',
+        'FIXER_RESULT {"status":"ok","prUrl":"https://example.test/pr/1","testPath":"tests/fix.spec.ts","redEvidence":"red","greenEvidence":"green","regressionGuardEvidence":"guard","e2eValidationEvidence":"e2e proof"}',
       ].join("\n");
 
       const parsed = parseFixerResult(stdout);
@@ -37,12 +37,13 @@ describe("fixer", () => {
         redEvidence: "red",
         greenEvidence: "green",
         regressionGuardEvidence: "guard",
+        e2eValidationEvidence: "e2e proof",
       });
     });
 
     it("throws when proof fields are missing", () => {
       const stdout = [
-        'FIXER_RESULT {"status":"ok","prUrl":"https://example.test/pr/1","testPath":"tests/fix.spec.ts","greenEvidence":"green","regressionGuardEvidence":"guard"}',
+        'FIXER_RESULT {"status":"ok","prUrl":"https://example.test/pr/1","testPath":"tests/fix.spec.ts","greenEvidence":"green","regressionGuardEvidence":"guard","e2eValidationEvidence":"e2e proof"}',
       ].join("\n");
 
       expect(() => parseFixerResult(stdout)).toThrow(/missing required proof/);
@@ -87,7 +88,7 @@ describe("fixer", () => {
       startThreadMock.mockReturnValue({ run: runMock });
       runMock.mockResolvedValue({
         finalResponse:
-          'LOG\nFIXER_RESULT {"status":"ok","prUrl":"https://example.test/pr/2","testPath":"tests/fix2.spec.ts","redEvidence":"red","greenEvidence":"green","regressionGuardEvidence":"guard","browserVerificationEvidence":"browser"}\n',
+          'LOG\nFIXER_RESULT {"status":"ok","prUrl":"https://example.test/pr/2","testPath":"tests/fix2.spec.ts","redEvidence":"red","greenEvidence":"green","regressionGuardEvidence":"guard","e2eValidationEvidence":"e2e proof","browserVerificationEvidence":"browser"}\n',
       });
 
       const result = await runFixer({
@@ -103,6 +104,7 @@ describe("fixer", () => {
         redEvidence: "red",
         greenEvidence: "green",
         regressionGuardEvidence: "guard",
+        e2eValidationEvidence: "e2e proof",
         browserVerificationEvidence: "browser",
       });
     });

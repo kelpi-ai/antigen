@@ -7,6 +7,7 @@ export interface FixerResult {
   redEvidence: string;
   greenEvidence: string;
   regressionGuardEvidence: string;
+  e2eValidationEvidence: string;
   browserVerificationEvidence?: string;
 }
 
@@ -18,7 +19,15 @@ export async function runCodexTask(prompt: string, cwd?: string): Promise<string
 }
 
 const RESULT_PREFIX = "FIXER_RESULT ";
-const REQUIRED_FIELDS: (keyof FixerResult)[] = ["status", "prUrl", "testPath", "redEvidence", "greenEvidence", "regressionGuardEvidence"];
+const REQUIRED_FIELDS: (keyof FixerResult)[] = [
+  "status",
+  "prUrl",
+  "testPath",
+  "redEvidence",
+  "greenEvidence",
+  "regressionGuardEvidence",
+  "e2eValidationEvidence",
+];
 
 function isPresentString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -51,6 +60,7 @@ export function parseFixerResult(stdout: string): FixerResult {
     redEvidence: parsed.redEvidence!,
     greenEvidence: parsed.greenEvidence!,
     regressionGuardEvidence: parsed.regressionGuardEvidence!,
+    e2eValidationEvidence: parsed.e2eValidationEvidence!,
     browserVerificationEvidence: parsed.browserVerificationEvidence,
   };
 };

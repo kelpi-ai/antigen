@@ -40,6 +40,7 @@ describe("buildFixerPrompt", () => {
     expect(prompt).toContain('"redEvidence"');
     expect(prompt).toContain('"greenEvidence"');
     expect(prompt).toContain('"regressionGuardEvidence"');
+    expect(prompt).toContain('"e2eValidationEvidence"');
   });
 
   it("contains target app URL, environment hints, and accessibility tree diff guidance", () => {

@@ -35,6 +35,6 @@ When finished, commit and push with local git.
 Then use GitHub MCP to open a draft PR.
 
 Return exactly one line:
-FIXER_RESULT {"status":"ok","prUrl":"<url>","testPath":"<path>","redEvidence":"<red proof>","greenEvidence":"<green proof>","regressionGuardEvidence":"<regression proof>","browserVerificationEvidence":"<optional browser proof>"}
+FIXER_RESULT {"status":"ok","prUrl":"<url>","testPath":"<path>","redEvidence":"<red proof>","greenEvidence":"<green proof>","regressionGuardEvidence":"<regression proof>","e2eValidationEvidence":"<automated e2e proof>","browserVerificationEvidence":"<optional browser proof>"}
 `.trim();
 }

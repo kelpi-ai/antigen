@@ -126,6 +126,7 @@ describe("onLinearTicket", () => {
       redEvidence: "red",
       greenEvidence: "green",
       regressionGuardEvidence: "guard",
+      e2eValidationEvidence: "e2e proof",
     };
 
     fetchTicketContextMock.mockResolvedValue(ticketContext);
@@ -273,6 +274,7 @@ describe("onLinearTicket", () => {
       redEvidence: "red",
       greenEvidence: "green",
       regressionGuardEvidence: "guard",
+      e2eValidationEvidence: "e2e proof",
     };
 
     fetchTicketContextMock.mockResolvedValue(ticketContext);

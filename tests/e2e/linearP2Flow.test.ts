@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createHmac } from "node:crypto";
-import { Hono } from "hono";
 
 const {
   fetchTicketContextMock,
@@ -39,27 +38,20 @@ vi.mock("../../src/codex/fixer", () => ({
   runFixer: runFixerMock,
 }));
 
-import { mountLinearWebhook } from "../../src/webhooks/linear";
-import { runLinearTicketFlow } from "../../src/inngest/functions/onLinearTicket";
+import { buildApp } from "../../src/server";
 import { inngest } from "../../src/inngest/client";
+import { onLinearTicket } from "../../src/inngest/functions/onLinearTicket";
 
 const sendSpy = vi.spyOn(inngest, "send");
 
-function sign(body: string, secret: string): string {
-  return `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
-}
+type LinearTicketEvent = {
+  name: "linear/ticket.created";
+  data: { ticketId: string; identifier: string; module: string; url: string };
+};
 
-function createStepRecorder() {
-  const steps: string[] = [];
-  return {
-    steps,
-    step: {
-      run: vi.fn(async (id: string, fn: () => Promise<unknown>) => {
-        steps.push(id);
-        return fn();
-      }),
-    },
-  };
+function inngestSignature(secret: string, body: string, timestamp: string) {
+  const signature = createHmac("sha256", secret).update(body).update(timestamp).digest("hex");
+  return `t=${timestamp}&s=${signature}`;
 }
 
 describe("linear p2 localhost flow", () => {
@@ -81,7 +73,6 @@ describe("linear p2 localhost flow", () => {
     process.env.PORT = "3000";
 
     sendSpy.mockReset();
-    sendSpy.mockResolvedValue(undefined as never);
     fetchTicketContextMock.mockReset();
     updateCheckoutMock.mockReset();
     createWorktreeMock.mockReset();
@@ -90,42 +81,12 @@ describe("linear p2 localhost flow", () => {
     runFixerMock.mockReset();
   });
 
-  it("validates webhook emission and runs runLinearTicketFlow with mocked side effects", async () => {
-    const app = new Hono();
-    mountLinearWebhook(app);
-    const body = JSON.stringify({
-      action: "create",
-      type: "Issue",
-      data: {
-        id: "lin-123",
-        identifier: "BUG-999",
-        url: "https://linear.app/acme/issue/BUG-999",
-        labels: [{ name: "bug" }, { name: "module: checkout" }],
-      },
-    });
+  it("posts the webhook, executes linear flow through /api/inngest in-process", async () => {
+    const app = buildApp();
+    let flowResponse: Response | undefined;
+    const stepOrder: string[] = [];
 
-    const res = await app.request("/webhooks/linear", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "linear-signature": sign(body, process.env.LINEAR_WEBHOOK_SECRET),
-      },
-      body,
-    });
-
-    expect(res.status).toBe(202);
-    expect(sendSpy).toHaveBeenCalledTimes(1);
-    const emittedEvent = sendSpy.mock.calls[0][0] as {
-      name: "linear/ticket.created";
-      data: {
-        ticketId: string;
-        identifier: string;
-        module: string;
-        url: string;
-      };
-    };
-
-    expect(emittedEvent).toEqual({
+    const emittedEvent: LinearTicketEvent = {
       name: "linear/ticket.created",
       data: {
         ticketId: "lin-123",
@@ -133,13 +94,10 @@ describe("linear p2 localhost flow", () => {
         module: "checkout",
         url: "https://linear.app/acme/issue/BUG-999",
       },
-    });
+    };
 
     const ticket = {
-      ticketId: emittedEvent.data.ticketId,
-      identifier: emittedEvent.data.identifier,
-      module: emittedEvent.data.module,
-      url: emittedEvent.data.url,
+      ...emittedEvent.data,
       title: "Checkout validation bug",
       body: "Button disappears at 1366x768",
       browserVisible: true,
@@ -157,7 +115,7 @@ describe("linear p2 localhost flow", () => {
       path: "/tmp/worktrees/BUG-999-abc",
       branch: "fix/BUG-999-abc",
     });
-    buildFixerPromptMock.mockReturnValue("run final end-to-end validation and fix");
+    buildFixerPromptMock.mockReturnValue("run final automated e2e validation and fix");
     runFixerMock.mockResolvedValue({
       status: "ok",
       prUrl: "https://example.test/pull/1",
@@ -165,23 +123,116 @@ describe("linear p2 localhost flow", () => {
       redEvidence: "red proof",
       greenEvidence: "green proof",
       regressionGuardEvidence: "guard proof",
+      e2eValidationEvidence: "e2e proof",
     });
 
-    const { steps, step } = createStepRecorder();
-    const result = await runLinearTicketFlow({
-      event: { data: emittedEvent.data },
-      step,
+    sendSpy.mockImplementation(async (event) => {
+      const normalizedEvent = (event ?? emittedEvent) as LinearTicketEvent;
+      const linearFunctionId = onLinearTicket.id("incident-loop");
+      const runId = `run-${Date.now()}`;
+      const ctx = {
+        run_id: runId,
+        attempt: 0,
+      };
+      const completedSteps: Record<string, { type: "data"; data: unknown }> = {};
+      let response: Response = new Response("", { status: 500 });
+
+      const invokeStep = async (stepId = "step") => {
+        const bodyObj = {
+          event: normalizedEvent,
+          version: 1,
+          events: [normalizedEvent],
+          steps: completedSteps,
+          ctx,
+        };
+        const body = JSON.stringify(bodyObj);
+        const signature = inngestSignature(process.env.INNGEST_SIGNING_KEY || "", body, Math.floor(Date.now() / 1000).toString());
+        const nextUrl = `/api/inngest?fnId=${linearFunctionId}&stepId=${stepId}`;
+        response = await app.request(nextUrl, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-inngest-signature": signature,
+          },
+          body,
+        });
+
+        const bodyText = await response.text();
+        if (response.status !== 206) {
+          return { response, bodyText };
+        }
+
+        const operations = JSON.parse(bodyText) as Array<{
+          op: string;
+          id: string;
+          displayName?: string;
+          name?: string;
+          data: unknown;
+        }>;
+        for (const operation of operations) {
+          if (operation.op === "StepRun") {
+            completedSteps[operation.id] = {
+              type: "data",
+              data: operation.data,
+            };
+            stepOrder.push(operation.displayName || operation.name || operation.id);
+          }
+        }
+
+        return { response, bodyText };
+      };
+
+      let status = 206;
+      let bodyText = "";
+      for (let attempt = 0; attempt < 20 && status === 206; attempt += 1) {
+        const result = await invokeStep();
+        response = result.response;
+        status = result.response.status;
+        bodyText = result.bodyText;
+        if (status !== 206) {
+          break;
+        }
+        const operations = JSON.parse(bodyText) as Array<{ op: string }>;
+        const hasStepRun = operations.some((operation) => operation.op === "StepRun");
+        if (!hasStepRun) {
+          break;
+        }
+      }
+
+      flowResponse = new Response(bodyText, {
+        status,
+        headers: response.headers,
+      });
+
+      const eventTicketId = normalizedEvent.data.ticketId || emittedEvent.data.ticketId;
+      return { ids: [eventTicketId] } as never;
     });
 
-    expect(result).toEqual({
-      status: "ok",
-      prUrl: "https://example.test/pull/1",
-      testPath: "tests/fixes/bug-999.spec.ts",
-      redEvidence: "red proof",
-      greenEvidence: "green proof",
-      regressionGuardEvidence: "guard proof",
+    const body = JSON.stringify({
+      action: "create",
+      type: "Issue",
+      data: {
+        id: emittedEvent.data.ticketId,
+        identifier: emittedEvent.data.identifier,
+        url: emittedEvent.data.url,
+        labels: [{ name: "bug" }, { name: "module: checkout" }],
+      },
     });
-    expect(steps).toEqual([
+
+    const linearSignature = `sha256=${createHmac("sha256", process.env.LINEAR_WEBHOOK_SECRET ?? "").update(body).digest("hex")}`;
+    const webhookResponse = await app.request("/webhooks/linear", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "linear-signature": linearSignature,
+      },
+      body,
+    });
+
+    expect(webhookResponse.status).toBe(202);
+    expect(flowResponse).toBeDefined();
+    expect([200, 206]).toContain(flowResponse!.status);
+    expect(stepOrder).toEqual([
       "fetch-ticket-context",
       "update-checkout",
       "create-worktree",
@@ -189,7 +240,15 @@ describe("linear p2 localhost flow", () => {
       "run-fixer",
       "remove-worktree",
     ]);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(sendSpy).toHaveBeenCalledWith(emittedEvent);
+
+    const [actualEvent] = sendSpy.mock.calls[0] as [LinearTicketEvent];
+    expect(actualEvent).toEqual(emittedEvent);
+
     expect(fetchTicketContextMock).toHaveBeenCalledWith(emittedEvent.data);
+    expect(updateCheckoutMock).toHaveBeenCalledWith();
+    expect(createWorktreeMock).toHaveBeenCalledWith("BUG-999");
     expect(buildFixerPromptMock).toHaveBeenCalledWith({
       ticket,
       worktreePath: "/tmp/worktrees/BUG-999-abc",
@@ -197,9 +256,22 @@ describe("linear p2 localhost flow", () => {
       targetAppUrl: "http://localhost:3001",
     });
     expect(runFixerMock).toHaveBeenCalledWith({
-      prompt: "run final end-to-end validation and fix",
+      prompt: "run final automated e2e validation and fix",
       cwd: "/tmp/worktrees/BUG-999-abc",
     });
     expect(removeWorktreeMock).toHaveBeenCalledWith("/tmp/worktrees/BUG-999-abc");
+
+    const fetchCall = fetchTicketContextMock.mock.invocationCallOrder[0];
+    const checkoutCall = updateCheckoutMock.mock.invocationCallOrder[0];
+    const worktreeCall = createWorktreeMock.mock.invocationCallOrder[0];
+    const promptCall = buildFixerPromptMock.mock.invocationCallOrder[0];
+    const fixerCall = runFixerMock.mock.invocationCallOrder[0];
+    const removeCall = removeWorktreeMock.mock.invocationCallOrder[0];
+
+    expect(fetchCall).toBeLessThan(checkoutCall);
+    expect(checkoutCall).toBeLessThan(worktreeCall);
+    expect(worktreeCall).toBeLessThan(promptCall);
+    expect(promptCall).toBeLessThan(fixerCall);
+    expect(fixerCall).toBeLessThan(removeCall);
   });
 });
