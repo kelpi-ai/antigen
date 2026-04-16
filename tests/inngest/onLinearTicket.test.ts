@@ -3,17 +3,32 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 const {
   buildFixerPromptMock,
   fetchTicketContextMock,
-  updateCheckoutMock,
+  verifyCheckoutMock,
+  fetchCheckoutRemoteMock,
+  pullCheckoutBaseBranchMock,
   createWorktreeMock,
   removeWorktreeMock,
-  runFixerMock,
+  runCodexTaskMock,
+  persistFixerTranscriptMock,
+  parseFixerResultMock,
+  CodexTaskErrorMock,
 } = vi.hoisted(() => ({
   buildFixerPromptMock: vi.fn(),
   fetchTicketContextMock: vi.fn(),
-  updateCheckoutMock: vi.fn(),
+  verifyCheckoutMock: vi.fn(),
+  fetchCheckoutRemoteMock: vi.fn(),
+  pullCheckoutBaseBranchMock: vi.fn(),
   createWorktreeMock: vi.fn(),
   removeWorktreeMock: vi.fn(),
-  runFixerMock: vi.fn(),
+  runCodexTaskMock: vi.fn(),
+  persistFixerTranscriptMock: vi.fn(),
+  parseFixerResultMock: vi.fn(),
+  CodexTaskErrorMock: class CodexTaskError extends Error {
+    constructor(public output: unknown, message: string) {
+      super(message);
+      this.name = "CodexTaskError";
+    }
+  },
 }));
 
 vi.mock("../../src/prompts/fixer", () => ({
@@ -25,7 +40,9 @@ vi.mock("../../src/linear/fetchTicketContext", () => ({
 }));
 
 vi.mock("../../src/git/updateCheckout", () => ({
-  updateCheckout: updateCheckoutMock,
+  verifyCheckout: verifyCheckoutMock,
+  fetchCheckoutRemote: fetchCheckoutRemoteMock,
+  pullCheckoutBaseBranch: pullCheckoutBaseBranchMock,
 }));
 
 vi.mock("../../src/git/worktree", () => ({
@@ -34,7 +51,10 @@ vi.mock("../../src/git/worktree", () => ({
 }));
 
 vi.mock("../../src/codex/fixer", () => ({
-  runFixer: runFixerMock,
+  runCodexTask: runCodexTaskMock,
+  persistFixerTranscript: persistFixerTranscriptMock,
+  parseFixerResult: parseFixerResultMock,
+  CodexTaskError: CodexTaskErrorMock,
 }));
 
 import { functions } from "../../src/inngest";
@@ -102,11 +122,15 @@ describe("onLinearTicket", () => {
     process.env.PORT = "3000";
 
     fetchTicketContextMock.mockReset();
-    updateCheckoutMock.mockReset();
+    verifyCheckoutMock.mockReset();
+    fetchCheckoutRemoteMock.mockReset();
+    pullCheckoutBaseBranchMock.mockReset();
     createWorktreeMock.mockReset();
     buildFixerPromptMock.mockReset();
     removeWorktreeMock.mockReset();
-    runFixerMock.mockReset();
+    runCodexTaskMock.mockReset();
+    persistFixerTranscriptMock.mockReset();
+    parseFixerResultMock.mockReset();
   });
 
   it("has id 'on-linear-ticket'", () => {
@@ -130,13 +154,26 @@ describe("onLinearTicket", () => {
     };
 
     fetchTicketContextMock.mockResolvedValue(ticketContext);
-    updateCheckoutMock.mockResolvedValue(undefined);
+    verifyCheckoutMock.mockResolvedValue(undefined);
+    fetchCheckoutRemoteMock.mockResolvedValue(undefined);
+    pullCheckoutBaseBranchMock.mockResolvedValue(undefined);
     createWorktreeMock.mockResolvedValue({
       path: "/tmp/wt/ABC-1-abcd",
       branch: "fix/ABC-1-abcd",
     });
     buildFixerPromptMock.mockReturnValue("prompt-body");
-    runFixerMock.mockResolvedValue(result);
+    runCodexTaskMock.mockResolvedValue({
+      stdout:
+        'LOG\nFIXER_RESULT {"status":"ok","prUrl":"https://example.test/pr/1","testPath":"tests/fix.spec.ts","redEvidence":"red","greenEvidence":"green","regressionGuardEvidence":"guard","e2eValidationEvidence":"e2e proof"}\n',
+      stderr: "",
+      exitCode: 0,
+      transcript: "[stdout]\ninstalling dependencies\n",
+    });
+    persistFixerTranscriptMock.mockImplementation(async ({ observer }) => {
+      observer?.onEvent?.({ type: "persisted", path: "/tmp/artifacts/fixer-transcripts/abc-1.log" });
+      return "/tmp/artifacts/fixer-transcripts/abc-1.log";
+    });
+    parseFixerResultMock.mockReturnValue(result);
 
     const actual = await runLinearTicketFlow({
       event: { data: ticket },
@@ -146,21 +183,34 @@ describe("onLinearTicket", () => {
     expect(actual).toEqual(result);
     expect(steps).toEqual([
       "fetch-ticket-context",
-      "update-checkout",
+      "verify-target-checkout",
+      "fetch-target-remote",
+      "pull-target-base-branch",
       "create-worktree",
       "build-prompt",
       "run-fixer",
+      "persist-fixer-transcript",
+      "parse-fixer-result",
       "remove-worktree",
     ]);
     expect(buildFixerPromptMock).toHaveBeenCalledWith(
       expect.objectContaining({ targetAppUrl: "http://localhost:3001" }),
     );
     expect(removeWorktreeMock).toHaveBeenCalledWith("/tmp/wt/ABC-1-abcd");
-    expect(runFixerMock).toHaveBeenCalledWith(
-      {
+    expect(runCodexTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({
         prompt: "prompt-body",
         cwd: "/tmp/wt/ABC-1-abcd",
-      },
+      }),
+    );
+    expect(persistFixerTranscriptMock).toHaveBeenCalledWith({
+      identifier: "ABC-1",
+      branch: "fix/ABC-1-abcd",
+      transcript: "[stdout]\ninstalling dependencies\n",
+      observer: expect.any(Object),
+    });
+    expect(parseFixerResultMock).toHaveBeenCalledWith(
+      'LOG\nFIXER_RESULT {"status":"ok","prUrl":"https://example.test/pr/1","testPath":"tests/fix.spec.ts","redEvidence":"red","greenEvidence":"green","regressionGuardEvidence":"guard","e2eValidationEvidence":"e2e proof"}\n',
     );
   });
 
@@ -168,13 +218,13 @@ describe("onLinearTicket", () => {
     const { steps, step } = createStepRecorder();
 
     fetchTicketContextMock.mockResolvedValue(ticketContext);
-    updateCheckoutMock.mockRejectedValue(new Error("cannot refresh"));
+    verifyCheckoutMock.mockRejectedValue(new Error("cannot refresh"));
 
     await expect(
       runLinearTicketFlow({ event: { data: ticket }, step }),
     ).rejects.toThrow(/cannot refresh/);
 
-    expect(steps).toEqual(["fetch-ticket-context", "update-checkout"]);
+    expect(steps).toEqual(["fetch-ticket-context", "verify-target-checkout"]);
     expect(createWorktreeMock).not.toHaveBeenCalled();
     expect(removeWorktreeMock).not.toHaveBeenCalled();
   });
@@ -183,25 +233,39 @@ describe("onLinearTicket", () => {
     const { steps, step } = createStepRecorder();
 
     fetchTicketContextMock.mockResolvedValue(ticketContext);
-    updateCheckoutMock.mockResolvedValue(undefined);
+    verifyCheckoutMock.mockResolvedValue(undefined);
+    fetchCheckoutRemoteMock.mockResolvedValue(undefined);
+    pullCheckoutBaseBranchMock.mockResolvedValue(undefined);
     createWorktreeMock.mockResolvedValue({
       path: "/tmp/wt/ABC-1-efgh",
       branch: "fix/ABC-1-efgh",
     });
-    runFixerMock.mockRejectedValue(new Error("fixer failed"));
+    runCodexTaskMock.mockRejectedValue(new Error("fixer failed"));
 
-    await expect(
-      runLinearTicketFlow({ event: { data: ticket }, step }),
-    ).rejects.toThrow(/fixer failed/);
+    let caughtError: unknown;
+    try {
+      await runLinearTicketFlow({ event: { data: ticket }, step });
+      expect.fail("expected runLinearTicketFlow to throw");
+    } catch (error) {
+      caughtError = error;
+    }
+    expect(caughtError).toBeInstanceOf(Error);
+    expect((caughtError as Error).message).toContain("fixer failed");
 
     expect(steps).toEqual([
       "fetch-ticket-context",
-      "update-checkout",
+      "verify-target-checkout",
+      "fetch-target-remote",
+      "pull-target-base-branch",
       "create-worktree",
       "build-prompt",
       "run-fixer",
       "remove-worktree",
     ]);
+    expect(runCodexTaskMock).toHaveBeenCalledTimes(1);
+    expect(persistFixerTranscriptMock).toHaveBeenCalledTimes(0);
+    expect(parseFixerResultMock).toHaveBeenCalledTimes(0);
+
     expect(removeWorktreeMock).toHaveBeenCalledWith("/tmp/wt/ABC-1-efgh");
   });
 
@@ -209,7 +273,9 @@ describe("onLinearTicket", () => {
     const { steps, step } = createStepRecorder();
 
     fetchTicketContextMock.mockResolvedValue(ticketContext);
-    updateCheckoutMock.mockResolvedValue(undefined);
+    verifyCheckoutMock.mockResolvedValue(undefined);
+    fetchCheckoutRemoteMock.mockResolvedValue(undefined);
+    pullCheckoutBaseBranchMock.mockResolvedValue(undefined);
     createWorktreeMock.mockResolvedValue({
       path: "/tmp/wt/ABC-1-ijkl",
       branch: "fix/ABC-1-ijkl",
@@ -222,7 +288,9 @@ describe("onLinearTicket", () => {
 
     expect(steps).toEqual([
       "fetch-ticket-context",
-      "update-checkout",
+      "verify-target-checkout",
+      "fetch-target-remote",
+      "pull-target-base-branch",
       "create-worktree",
       "build-prompt",
       "remove-worktree",
@@ -234,13 +302,15 @@ describe("onLinearTicket", () => {
     const { steps, step } = createStepRecorder();
 
     fetchTicketContextMock.mockResolvedValue(ticketContext);
-    updateCheckoutMock.mockResolvedValue(undefined);
+    verifyCheckoutMock.mockResolvedValue(undefined);
+    fetchCheckoutRemoteMock.mockResolvedValue(undefined);
+    pullCheckoutBaseBranchMock.mockResolvedValue(undefined);
     createWorktreeMock.mockResolvedValue({
       path: "/tmp/wt/ABC-1-mnop",
       branch: "fix/ABC-1-mnop",
     });
     buildFixerPromptMock.mockResolvedValue("prompt-body");
-    runFixerMock.mockRejectedValue(new Error("fixer failed"));
+    runCodexTaskMock.mockRejectedValue(new Error("fixer failed"));
     removeWorktreeMock.mockRejectedValue(new Error("cleanup failed"));
 
     try {
@@ -257,7 +327,9 @@ describe("onLinearTicket", () => {
 
     expect(steps).toEqual([
       "fetch-ticket-context",
-      "update-checkout",
+      "verify-target-checkout",
+      "fetch-target-remote",
+      "pull-target-base-branch",
       "create-worktree",
       "build-prompt",
       "run-fixer",
@@ -278,13 +350,29 @@ describe("onLinearTicket", () => {
     };
 
     fetchTicketContextMock.mockResolvedValue(ticketContext);
-    updateCheckoutMock.mockResolvedValue(undefined);
+    verifyCheckoutMock.mockResolvedValue(undefined);
+    fetchCheckoutRemoteMock.mockResolvedValue(undefined);
+    pullCheckoutBaseBranchMock.mockResolvedValue(undefined);
     createWorktreeMock.mockResolvedValue({
       path: "/tmp/wt/ABC-1-mnop",
       branch: "fix/ABC-1-mnop",
     });
     buildFixerPromptMock.mockReturnValue("prompt-body");
-    runFixerMock.mockResolvedValue(result);
+    runCodexTaskMock.mockResolvedValue({
+      stdout:
+        'LOG\nFIXER_RESULT {"status":"ok","prUrl":"https://example.test/pr/2","testPath":"tests/fix2.spec.ts","redEvidence":"red","greenEvidence":"green","regressionGuardEvidence":"guard","e2eValidationEvidence":"e2e proof"}\n',
+      stderr: "",
+      exitCode: 0,
+      transcript: "[stdout]\ninstalling dependencies\n",
+    });
+    persistFixerTranscriptMock.mockImplementation(async ({ observer }) => {
+      observer?.onEvent?.({
+        type: "persisted",
+        path: "/tmp/artifacts/fixer-transcripts/abc-1.log",
+      });
+      return "/tmp/artifacts/fixer-transcripts/abc-1.log";
+    });
+    parseFixerResultMock.mockReturnValue(result);
     removeWorktreeMock.mockRejectedValue(new Error("cleanup failed"));
 
     await expect(
@@ -293,12 +381,139 @@ describe("onLinearTicket", () => {
 
     expect(steps).toEqual([
       "fetch-ticket-context",
-      "update-checkout",
+      "verify-target-checkout",
+      "fetch-target-remote",
+      "pull-target-base-branch",
       "create-worktree",
       "build-prompt",
       "run-fixer",
+      "persist-fixer-transcript",
+      "parse-fixer-result",
       "remove-worktree",
     ]);
     expect(removeWorktreeMock).toHaveBeenCalledWith("/tmp/wt/ABC-1-mnop");
+  });
+
+  it("streams fixer output, persists the transcript, and parses in separate steps", async () => {
+    const { steps, step } = createStepRecorder();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = {
+      status: "ok" as const,
+      prUrl: "https://example.test/pr/1",
+      testPath: "tests/fix.spec.ts",
+      redEvidence: "red",
+      greenEvidence: "green",
+      regressionGuardEvidence: "guard",
+      e2eValidationEvidence: "e2e proof",
+    };
+
+    fetchTicketContextMock.mockResolvedValue(ticketContext);
+    verifyCheckoutMock.mockResolvedValue(undefined);
+    fetchCheckoutRemoteMock.mockResolvedValue(undefined);
+    pullCheckoutBaseBranchMock.mockResolvedValue(undefined);
+    createWorktreeMock.mockResolvedValue({
+      path: "/tmp/wt/ABC-1-abcd",
+      branch: "fix/ABC-1-abcd",
+    });
+    buildFixerPromptMock.mockReturnValue("prompt-body");
+    runCodexTaskMock.mockImplementation(
+      async ({ observer }: { observer?: { onEvent?: (event: unknown) => void } }) => {
+        observer?.onEvent?.({ type: "spawn", command: "codex", args: ["exec"], cwd: "/tmp/wt/ABC-1-abcd" });
+        observer?.onEvent?.({ type: "stdout", chunk: "installing dependencies\n" });
+        observer?.onEvent?.({ type: "stderr", chunk: "warn line\n" });
+        observer?.onEvent?.({ type: "exit", exitCode: 0 });
+
+        return {
+          stdout:
+            'LOG\nFIXER_RESULT {"status":"ok","prUrl":"https://example.test/pr/1","testPath":"tests/fix.spec.ts","redEvidence":"red","greenEvidence":"green","regressionGuardEvidence":"guard","e2eValidationEvidence":"e2e proof"}\n',
+          stderr: "warn line\n",
+          exitCode: 0,
+          transcript: "[stdout]\ninstalling dependencies\n[stderr]\nwarn line\n",
+        };
+      },
+    );
+    persistFixerTranscriptMock.mockImplementation(async ({ observer }) => {
+      observer?.onEvent?.({
+        type: "persisted",
+        path: "/tmp/artifacts/fixer-transcripts/abc-1.log",
+      });
+      return "/tmp/artifacts/fixer-transcripts/abc-1.log";
+    });
+    parseFixerResultMock.mockReturnValue(result);
+
+    const actual = await runLinearTicketFlow({
+      event: { data: ticket },
+      step,
+    });
+
+    expect(actual).toEqual(result);
+    expect(steps).toEqual([
+      "fetch-ticket-context",
+      "verify-target-checkout",
+      "fetch-target-remote",
+      "pull-target-base-branch",
+      "create-worktree",
+      "build-prompt",
+      "run-fixer",
+      "persist-fixer-transcript",
+      "parse-fixer-result",
+      "remove-worktree",
+    ]);
+    expect(logSpy).toHaveBeenCalledWith("fixer.spawn", expect.objectContaining({ cwd: "/tmp/wt/ABC-1-abcd" }));
+    expect(logSpy).toHaveBeenCalledWith("fixer.stdout", "installing dependencies\n");
+    expect(errorSpy).toHaveBeenCalledWith("fixer.stderr", "warn line\n");
+    expect(logSpy).toHaveBeenCalledWith("fixer.persisted", "/tmp/artifacts/fixer-transcripts/abc-1.log");
+    expect(logSpy).toHaveBeenCalledWith("fixer.parse.start", "ABC-1");
+    expect(logSpy).toHaveBeenCalledWith("fixer.parse.ok", "https://example.test/pr/1");
+  });
+
+  it("persists the transcript before rethrowing a fixer execution failure", async () => {
+    const { steps, step } = createStepRecorder();
+
+    fetchTicketContextMock.mockResolvedValue(ticketContext);
+    verifyCheckoutMock.mockResolvedValue(undefined);
+    fetchCheckoutRemoteMock.mockResolvedValue(undefined);
+    pullCheckoutBaseBranchMock.mockResolvedValue(undefined);
+    createWorktreeMock.mockResolvedValue({
+      path: "/tmp/wt/ABC-1-fail",
+      branch: "fix/ABC-1-fail",
+    });
+    buildFixerPromptMock.mockReturnValue("prompt-body");
+    runCodexTaskMock.mockRejectedValue(
+      new CodexTaskErrorMock(
+        {
+          stdout: "partial output\n",
+          stderr: "boom\n",
+          exitCode: 1,
+          transcript: "[stdout]\npartial output\n[stderr]\nboom\n",
+        },
+        "codex exited 1: boom",
+      ),
+    );
+    persistFixerTranscriptMock.mockResolvedValue("/tmp/artifacts/fixer-transcripts/abc-1-fail.log");
+
+    await expect(
+      runLinearTicketFlow({ event: { data: ticket }, step }),
+    ).rejects.toThrow(/codex exited 1: boom/);
+
+    expect(steps).toEqual([
+      "fetch-ticket-context",
+      "verify-target-checkout",
+      "fetch-target-remote",
+      "pull-target-base-branch",
+      "create-worktree",
+      "build-prompt",
+      "run-fixer",
+      "persist-fixer-transcript",
+      "remove-worktree",
+    ]);
+    expect(persistFixerTranscriptMock).toHaveBeenCalledWith({
+      identifier: "ABC-1",
+      branch: "fix/ABC-1-fail",
+      transcript: "[stdout]\npartial output\n[stderr]\nboom\n",
+      observer: expect.any(Object),
+    });
   });
 });

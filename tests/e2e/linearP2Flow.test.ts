@@ -3,18 +3,26 @@ import { createHmac } from "node:crypto";
 
 const {
   fetchTicketContextMock,
-  updateCheckoutMock,
+  verifyCheckoutMock,
+  fetchCheckoutRemoteMock,
+  pullCheckoutBaseBranchMock,
   createWorktreeMock,
   removeWorktreeMock,
   buildFixerPromptMock,
-  runFixerMock,
+  runCodexTaskMock,
+  persistFixerTranscriptMock,
+  parseFixerResultMock,
 } = vi.hoisted(() => ({
   fetchTicketContextMock: vi.fn(),
-  updateCheckoutMock: vi.fn(),
+  verifyCheckoutMock: vi.fn(),
+  fetchCheckoutRemoteMock: vi.fn(),
+  pullCheckoutBaseBranchMock: vi.fn(),
   createWorktreeMock: vi.fn(),
   removeWorktreeMock: vi.fn(),
   buildFixerPromptMock: vi.fn(),
-  runFixerMock: vi.fn(),
+  runCodexTaskMock: vi.fn(),
+  persistFixerTranscriptMock: vi.fn(),
+  parseFixerResultMock: vi.fn(),
 }));
 
 vi.mock("../../src/linear/fetchTicketContext", () => ({
@@ -22,7 +30,9 @@ vi.mock("../../src/linear/fetchTicketContext", () => ({
 }));
 
 vi.mock("../../src/git/updateCheckout", () => ({
-  updateCheckout: updateCheckoutMock,
+  verifyCheckout: verifyCheckoutMock,
+  fetchCheckoutRemote: fetchCheckoutRemoteMock,
+  pullCheckoutBaseBranch: pullCheckoutBaseBranchMock,
 }));
 
 vi.mock("../../src/git/worktree", () => ({
@@ -35,7 +45,9 @@ vi.mock("../../src/prompts/fixer", () => ({
 }));
 
 vi.mock("../../src/codex/fixer", () => ({
-  runFixer: runFixerMock,
+  runCodexTask: runCodexTaskMock,
+  persistFixerTranscript: persistFixerTranscriptMock,
+  parseFixerResult: parseFixerResultMock,
 }));
 
 import { buildApp } from "../../src/server";
@@ -74,11 +86,15 @@ describe("linear p2 localhost flow", () => {
 
     sendSpy.mockReset();
     fetchTicketContextMock.mockReset();
-    updateCheckoutMock.mockReset();
+    verifyCheckoutMock.mockReset();
+    fetchCheckoutRemoteMock.mockReset();
+    pullCheckoutBaseBranchMock.mockReset();
     createWorktreeMock.mockReset();
     removeWorktreeMock.mockReset();
     buildFixerPromptMock.mockReset();
-    runFixerMock.mockReset();
+    runCodexTaskMock.mockReset();
+    persistFixerTranscriptMock.mockReset();
+    parseFixerResultMock.mockReset();
   });
 
   it("posts the webhook, executes linear flow through /api/inngest in-process", async () => {
@@ -110,13 +126,25 @@ describe("linear p2 localhost flow", () => {
     };
 
     fetchTicketContextMock.mockResolvedValue(ticket);
-    updateCheckoutMock.mockResolvedValue(undefined);
+    verifyCheckoutMock.mockResolvedValue(undefined);
+    fetchCheckoutRemoteMock.mockResolvedValue(undefined);
+    pullCheckoutBaseBranchMock.mockResolvedValue(undefined);
     createWorktreeMock.mockResolvedValue({
       path: "/tmp/worktrees/BUG-999-abc",
       branch: "fix/BUG-999-abc",
     });
     buildFixerPromptMock.mockReturnValue("run final automated e2e validation and fix");
-    runFixerMock.mockResolvedValue({
+    runCodexTaskMock.mockResolvedValue({
+      stdout:
+        'LOG\nFIXER_RESULT {"status":"ok","prUrl":"https://example.test/pull/1","testPath":"tests/fixes/bug-999.spec.ts","redEvidence":"red proof","greenEvidence":"green proof","regressionGuardEvidence":"guard proof","e2eValidationEvidence":"e2e proof"}\n',
+      stderr: "",
+      exitCode: 0,
+      transcript: "[stdout]\ninstalling dependencies\n",
+    });
+    persistFixerTranscriptMock.mockResolvedValue(
+      "/tmp/artifacts/fixer-transcripts/bug-999.log",
+    );
+    parseFixerResultMock.mockReturnValue({
       status: "ok",
       prUrl: "https://example.test/pull/1",
       testPath: "tests/fixes/bug-999.spec.ts",
@@ -234,10 +262,14 @@ describe("linear p2 localhost flow", () => {
     expect([200, 206]).toContain(flowResponse!.status);
     expect(stepOrder).toEqual([
       "fetch-ticket-context",
-      "update-checkout",
+      "verify-target-checkout",
+      "fetch-target-remote",
+      "pull-target-base-branch",
       "create-worktree",
       "build-prompt",
       "run-fixer",
+      "persist-fixer-transcript",
+      "parse-fixer-result",
       "remove-worktree",
     ]);
     expect(sendSpy).toHaveBeenCalledTimes(1);
@@ -247,7 +279,9 @@ describe("linear p2 localhost flow", () => {
     expect(actualEvent).toEqual(emittedEvent);
 
     expect(fetchTicketContextMock).toHaveBeenCalledWith(emittedEvent.data);
-    expect(updateCheckoutMock).toHaveBeenCalledWith();
+    expect(verifyCheckoutMock).toHaveBeenCalledWith();
+    expect(fetchCheckoutRemoteMock).toHaveBeenCalledWith();
+    expect(pullCheckoutBaseBranchMock).toHaveBeenCalledWith();
     expect(createWorktreeMock).toHaveBeenCalledWith("BUG-999");
     expect(buildFixerPromptMock).toHaveBeenCalledWith({
       ticket,
@@ -255,21 +289,35 @@ describe("linear p2 localhost flow", () => {
       branch: "fix/BUG-999-abc",
       targetAppUrl: "http://localhost:3001",
     });
-    expect(runFixerMock).toHaveBeenCalledWith({
+    expect(runCodexTaskMock).toHaveBeenCalledWith({
       prompt: "run final automated e2e validation and fix",
       cwd: "/tmp/worktrees/BUG-999-abc",
+      observer: expect.any(Object),
     });
+    expect(persistFixerTranscriptMock).toHaveBeenCalledWith({
+      identifier: "BUG-999",
+      branch: "fix/BUG-999-abc",
+      transcript: "[stdout]\ninstalling dependencies\n",
+      observer: expect.any(Object),
+    });
+    expect(parseFixerResultMock).toHaveBeenCalledWith(
+      'LOG\nFIXER_RESULT {"status":"ok","prUrl":"https://example.test/pull/1","testPath":"tests/fixes/bug-999.spec.ts","redEvidence":"red proof","greenEvidence":"green proof","regressionGuardEvidence":"guard proof","e2eValidationEvidence":"e2e proof"}\n',
+    );
     expect(removeWorktreeMock).toHaveBeenCalledWith("/tmp/worktrees/BUG-999-abc");
 
     const fetchCall = fetchTicketContextMock.mock.invocationCallOrder[0];
-    const checkoutCall = updateCheckoutMock.mock.invocationCallOrder[0];
+    const verifyCall = verifyCheckoutMock.mock.invocationCallOrder[0];
+    const fetchRemoteCall = fetchCheckoutRemoteMock.mock.invocationCallOrder[0];
+    const pullCall = pullCheckoutBaseBranchMock.mock.invocationCallOrder[0];
     const worktreeCall = createWorktreeMock.mock.invocationCallOrder[0];
     const promptCall = buildFixerPromptMock.mock.invocationCallOrder[0];
-    const fixerCall = runFixerMock.mock.invocationCallOrder[0];
+    const fixerCall = runCodexTaskMock.mock.invocationCallOrder[0];
     const removeCall = removeWorktreeMock.mock.invocationCallOrder[0];
 
-    expect(fetchCall).toBeLessThan(checkoutCall);
-    expect(checkoutCall).toBeLessThan(worktreeCall);
+    expect(fetchCall).toBeLessThan(verifyCall);
+    expect(verifyCall).toBeLessThan(fetchRemoteCall);
+    expect(fetchRemoteCall).toBeLessThan(pullCall);
+    expect(pullCall).toBeLessThan(worktreeCall);
     expect(worktreeCall).toBeLessThan(promptCall);
     expect(promptCall).toBeLessThan(fixerCall);
     expect(fixerCall).toBeLessThan(removeCall);
