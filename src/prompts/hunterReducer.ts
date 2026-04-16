@@ -30,7 +30,7 @@ Reducer rules:
 - Treat uncertain results as advisory notes in the PR comment, not investigation tickets.
 
 Output exactly one line in this format:
-P3_REDUCER_JSON {"status":"clean|failures|partial|skipped","prComment":"...","investigationTickets":[{"action":"create","title":"...","body":"..."}]}
+P3_REDUCER_JSON {"status":"clean|failures|partial|skipped","prComment":"...","investigationTickets":[{"action":"create|update","title":"...","body":"..."}]}
 
 Do not print markdown. Do not print prose before or after the tagged JSON line.`;
 }

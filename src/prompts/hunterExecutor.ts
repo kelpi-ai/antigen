@@ -21,6 +21,7 @@ Scenario:
 - Summary: ${input.scenario.summary}
 - Rationale: ${input.scenario.rationale}
 - Target area: ${input.scenario.targetArea}
+- Route hint: ${input.scenario.routeHint ?? "none"}
 - Risk: ${input.scenario.risk}
 - Mode: ${input.scenario.mode}
 - Guardrails: ${input.scenario.guardrails.join("; ") || "none"}

@@ -25,7 +25,8 @@ describe("buildHunterReducerPrompt", () => {
   });
 
   it("opens or updates Linear investigation tickets only", () => {
-    expect(prompt).toMatch(/Linear investigation ticket/i);
+    expect(prompt).toMatch(/create or update/i);
+    expect(prompt).toMatch(/Linear investigation tickets/i);
     expect(prompt).not.toMatch(/draft PR/i);
   });
 
