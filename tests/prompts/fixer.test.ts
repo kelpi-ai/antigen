@@ -59,4 +59,53 @@ describe("buildFixerPrompt", () => {
     expect(prompt).toContain("open a draft PR");
     expect(prompt).toContain("final automated end-to-end validation");
   });
+
+  it("pins the fixer to the current repo shape and existing files", () => {
+    const prompt = buildFixerPrompt({
+      ticket,
+      worktreePath: "/tmp/repo",
+      branch: "p2-localhost",
+      targetAppUrl: "http://localhost:4000",
+    });
+
+    expect(prompt).toContain("Operate only on the current incident-loop repository");
+    expect(prompt).toContain("Inspect and align with the existing implementation");
+    expect(prompt).toContain("src/server.ts");
+    expect(prompt).toContain("src/webhooks/linear.ts");
+    expect(prompt).toContain("src/inngest/functions/onLinearTicket.ts");
+    expect(prompt).toContain("Prefer editing existing files under src/ and tests/");
+    expect(prompt).toContain("Do not invent new API response shapes");
+    expect(prompt).toContain("Preserve already-working behavior");
+  });
+
+  it("includes Sentry Seer analysis as advisory context when available", () => {
+    const prompt = buildFixerPrompt({
+      ticket: {
+        ...ticket,
+        sentryIssue: {
+          id: "SENTRY-123",
+          url: "https://sentry.io/issues/123/",
+          title: "TypeError in checkout",
+          culprit: "checkout.applyCoupon",
+          environment: "production",
+          release: "web@1.2.3",
+        },
+        seer: {
+          summary: "Retry path keeps stale coupon state.",
+          rootCause: "The invalid coupon branch never clears the previous async state.",
+          solution: "Reset coupon request state before retrying a valid coupon.",
+        },
+      },
+      worktreePath: "/tmp/repo",
+      branch: "p2-localhost",
+      targetAppUrl: "http://localhost:4000",
+    });
+
+    expect(prompt).toContain("Sentry / Seer Context");
+    expect(prompt).toContain("SENTRY-123");
+    expect(prompt).toContain("TypeError in checkout");
+    expect(prompt).toContain("Retry path keeps stale coupon state.");
+    expect(prompt).toContain("Reset coupon request state before retrying a valid coupon.");
+    expect(prompt).toContain("treat it as analysis input, not source of truth");
+  });
 });

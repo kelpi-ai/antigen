@@ -1,4 +1,9 @@
 import { runCodexTask } from "../codex/fixer";
+import {
+  inspectSentryIssue,
+  type SeerInsight,
+  type SentryIssueDetails,
+} from "../sentry/inspectIssue";
 
 export interface TicketSeed {
   ticketId: string;
@@ -12,6 +17,8 @@ export interface TicketContext extends TicketSeed {
   body: string;
   browserVisible: boolean;
   similarIssueContext: string;
+  sentryIssue?: SentryIssueDetails;
+  seer?: SeerInsight;
   environmentHints: {
     browser: string;
     os: string;
@@ -33,47 +40,91 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function parseAndValidateTicketContext(payload: unknown): TicketContext {
+function getFallbackString(value: unknown, fallback: string): string {
+  return isNonEmptyString(value) ? value : fallback;
+}
+
+function getOptionalString(value: unknown): string | undefined {
+  return isNonEmptyString(value) ? value : undefined;
+}
+
+function getBrowserVisible(value: unknown): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") {
+      return true;
+    }
+    if (normalized === "false") {
+      return false;
+    }
+  }
+
+  return false;
+}
+
+function parseSentryIssue(value: unknown): SentryIssueDetails | undefined {
+  if (!isObject(value)) {
+    return undefined;
+  }
+
+  const sentryIssue = {
+    id: getOptionalString(value.id),
+    url: getOptionalString(value.url),
+    title: getOptionalString(value.title),
+    culprit: getOptionalString(value.culprit),
+    environment: getOptionalString(value.environment),
+    release: getOptionalString(value.release),
+  };
+
+  if (!sentryIssue.id && !sentryIssue.url) {
+    return undefined;
+  }
+
+  return sentryIssue;
+}
+
+function mergeSentryIssue(
+  base: SentryIssueDetails,
+  inspected: SentryIssueDetails,
+): SentryIssueDetails {
+  return {
+    id: inspected.id ?? base.id,
+    url: inspected.url ?? base.url,
+    title: inspected.title ?? base.title,
+    culprit: inspected.culprit ?? base.culprit,
+    environment: inspected.environment ?? base.environment,
+    release: inspected.release ?? base.release,
+  };
+}
+
+function parseTicketContext(payload: unknown, input: TicketSeed): TicketContext {
   if (!isObject(payload)) {
     throw new Error("invalid LINEAR_TICKET_CONTEXT payload: expected JSON object");
   }
 
-  const environmentHints = payload.environmentHints;
-  if (!isObject(environmentHints)) {
-    throw new Error("invalid LINEAR_TICKET_CONTEXT payload: missing environmentHints");
-  }
-
-  if (
-    !isNonEmptyString(payload.ticketId) ||
-    !isNonEmptyString(payload.identifier) ||
-    !isString(payload.module) ||
-    !isNonEmptyString(payload.url) ||
-    !isNonEmptyString(payload.title) ||
-    !isNonEmptyString(payload.body) ||
-    !isNonEmptyString(payload.similarIssueContext) ||
-    typeof payload.browserVisible !== "boolean" ||
-    !isNonEmptyString(environmentHints.browser) ||
-    !isNonEmptyString(environmentHints.os) ||
-    !isNonEmptyString(environmentHints.viewport)
-  ) {
-    throw new Error(
-      "invalid LINEAR_TICKET_CONTEXT payload: ticketId, identifier, url, title, body, similarIssueContext, browserVisible, environmentHints.browser, environmentHints.os, environmentHints.viewport must be present and valid; module must be a string",
-    );
-  }
+  const environmentHints = isObject(payload.environmentHints) ? payload.environmentHints : {};
 
   return {
-    ticketId: payload.ticketId,
-    identifier: payload.identifier,
-    module: payload.module,
-    url: payload.url,
-    title: payload.title,
-    body: payload.body,
-    browserVisible: payload.browserVisible,
-    similarIssueContext: payload.similarIssueContext,
+    ticketId: getFallbackString(payload.ticketId, input.ticketId),
+    identifier: getFallbackString(payload.identifier, input.identifier),
+    module: isString(payload.module) ? payload.module : input.module,
+    url: getFallbackString(payload.url, input.url),
+    title: getFallbackString(payload.title, input.identifier),
+    body: getFallbackString(payload.body, "Ticket body unavailable."),
+    browserVisible: getBrowserVisible(payload.browserVisible),
+    similarIssueContext: getFallbackString(
+      payload.similarIssueContext,
+      "No similar issue context provided.",
+    ),
+    sentryIssue: parseSentryIssue(payload.sentryIssue),
     environmentHints: {
-      browser: environmentHints.browser,
-      os: environmentHints.os,
-      viewport: environmentHints.viewport,
+      browser: getFallbackString(environmentHints.browser, "unknown"),
+      os: getFallbackString(environmentHints.os, "unknown"),
+      viewport: getFallbackString(environmentHints.viewport, "unknown"),
     },
   };
 }
@@ -84,6 +135,17 @@ Fetch Linear ticket context for ${input.identifier} (${input.url}).
 Return a single line starting with "LINEAR_TICKET_CONTEXT ".
 The suffix must be a JSON payload containing:
 - ticketId, identifier, module, url, title, body, browserVisible, similarIssueContext, environmentHints{browser,os,viewport}
+- sentryIssue{id,url} when the ticket references a Sentry issue; otherwise sentryIssue: null is acceptable
+If any value is unavailable, still include the field using these fallbacks instead of omitting it:
+- ticketId => ${input.ticketId}
+- identifier => ${input.identifier}
+- module => ${input.module}
+- url => ${input.url}
+- title => ${input.identifier}
+- body => Ticket body unavailable.
+- browserVisible => false
+- similarIssueContext => No similar issue context provided.
+- environmentHints.browser/os/viewport => unknown
 Do not include any extra lines.
 `;
 
@@ -101,10 +163,28 @@ Do not include any extra lines.
     throw new Error("invalid LINEAR_TICKET_CONTEXT payload JSON");
   }
 
-  const validated = parseAndValidateTicketContext(parsed);
-
-  return {
-    ...validated,
-    module: validated.module || input.module,
+  const ticketContext = {
+    ...parseTicketContext(parsed, input),
   };
+
+  ticketContext.module = ticketContext.module || input.module;
+
+  if (!ticketContext.sentryIssue) {
+    return ticketContext;
+  }
+
+  try {
+    const inspection = await inspectSentryIssue(ticketContext.sentryIssue);
+    if (!inspection) {
+      return ticketContext;
+    }
+
+    return {
+      ...ticketContext,
+      sentryIssue: mergeSentryIssue(ticketContext.sentryIssue, inspection.issue),
+      ...(inspection.seer ? { seer: inspection.seer } : {}),
+    };
+  } catch {
+    return ticketContext;
+  }
 }

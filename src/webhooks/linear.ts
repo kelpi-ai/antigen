@@ -40,20 +40,26 @@ function getLabelNames(rawLabels: unknown): string[] {
     .filter(Boolean);
 }
 
+function normalizeLabelKey(label: string): string {
+  return label.trim().toLowerCase();
+}
+
 function extractModule(rawLabels: unknown): string {
   const labels = getLabelNames(rawLabels);
-  const moduleLabel = labels.find((label) => label.startsWith("module:"));
+  const moduleLabel = labels.find((label) =>
+    normalizeLabelKey(label).startsWith("module:"),
+  );
   if (!moduleLabel) {
     return "unknown";
   }
 
-  const moduleValue = moduleLabel.slice("module:".length).trim();
+  const moduleValue = normalizeLabelKey(moduleLabel).slice("module:".length).trim();
   return moduleValue.length > 0 ? moduleValue : "unknown";
 }
 
 function isBugLabeled(rawLabels: unknown): boolean {
   const labels = getLabelNames(rawLabels);
-  return labels.some((label) => label === "bug");
+  return labels.some((label) => normalizeLabelKey(label) === "bug");
 }
 
 function normalizeNormalizedString(value: unknown): string {
