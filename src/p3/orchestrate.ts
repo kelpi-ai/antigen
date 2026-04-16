@@ -20,6 +20,10 @@ import type {
   ReducerResult,
 } from "./contracts";
 
+type ExecutorOutcome =
+  | { status: "ok"; result: ExecutorResult }
+  | { status: "error"; error: unknown };
+
 interface RunPrHunterInput {
   event: ReadyForReviewEvent;
   step?: { run: (...args: any[]) => Promise<any> };
@@ -195,17 +199,37 @@ export async function runPrHunter({
     );
     executorResults = [];
     runPhase = "executor";
-    const runExecutor = async (scenario: HuntScenario) => {
-      const result = await runWithScenario(run.runDir, event, previewUrl, scenario, step);
-      executorResults.push(result);
-      return result;
+    const runExecutor = async (
+      scenario: HuntScenario,
+    ): Promise<ExecutorOutcome> => {
+      try {
+        const result = await runWithScenario(
+          run.runDir,
+          event,
+          previewUrl,
+          scenario,
+          step,
+        );
+        return { status: "ok", result };
+      } catch (error) {
+        return { status: "error", error };
+      }
     };
 
-    await runWithConcurrencyLimit(
+    const outcomes = await runWithConcurrencyLimit(
       executableScenarios,
       env.P3_EXECUTOR_CONCURRENCY,
       runExecutor,
     );
+    const successfulOutcomes = outcomes.filter(
+      (outcome) => outcome.status === "ok",
+    );
+    executorResults = successfulOutcomes.map((outcome) => outcome.result);
+
+    const firstFailure = outcomes.find((outcome) => outcome.status === "error");
+    if (firstFailure) {
+      throw firstFailure.error;
+    }
 
     runPhase = "reducer";
     return runReducer(

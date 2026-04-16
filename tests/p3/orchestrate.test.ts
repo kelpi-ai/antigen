@@ -299,6 +299,68 @@ describe("runPrHunter", () => {
     );
   });
 
+  it("records partial executor progress deterministically with concurrent executors", async () => {
+    process.env.P3_EXECUTOR_CONCURRENCY = "2";
+
+    const firstKill = vi.fn();
+    const secondKill = vi.fn();
+    vi.mocked(launchChromeSession).mockResolvedValueOnce({
+      process: { kill: firstKill } as unknown as ChildProcess,
+      debuggingPort: 9333,
+      wsEndpoint: "ws://127.0.0.1:9333/devtools/browser/test",
+    }).mockResolvedValueOnce({
+      process: { kill: secondKill } as unknown as ChildProcess,
+      debuggingPort: 9333,
+      wsEndpoint: "ws://127.0.0.1:9333/devtools/browser/test",
+    });
+
+    vi.mocked(createScenarioWorkspace).mockImplementation(
+      async ({ runDir, scenarioId }) => ({
+        scenarioDir: `${runDir}/scenarios/${scenarioId}`,
+        codexDir: `${runDir}/scenarios/${scenarioId}/.codex`,
+        profileDir: `${runDir}/scenarios/${scenarioId}/profile`,
+        screenshotPath: `${runDir}/scenarios/${scenarioId}/failure.png`,
+      }),
+    );
+
+    vi.mocked(invokeCodex)
+      .mockResolvedValueOnce({
+        stdout:
+          'P3_PLANNER_JSON {"previewUrl":"https://preview.example","scenarios":[{"id":"first","summary":"first scenario","rationale":"risk","targetArea":"checkout","risk":"high","mode":"read_safe","guardrails":[],"expectedEvidence":["consoleSignals"]},{"id":"second","summary":"second scenario","rationale":"risk","targetArea":"account","risk":"medium","mode":"read_safe","guardrails":[],"expectedEvidence":["networkSignals"]}]}',
+        stderr: "",
+        exitCode: 0,
+      })
+      .mockResolvedValueOnce({
+        stdout:
+          'P3_EXECUTOR_JSON {"scenarioId":"first","outcome":"failed","summary":"failed check","consoleSignals":["oops"],"networkSignals":[],"evidence":["TypeError"],"screenshotPath":"/tmp/run-123/scenarios/first/failure.png"}',
+        stderr: "",
+        exitCode: 0,
+      })
+      .mockResolvedValueOnce({
+        stdout: "not-json-output",
+        stderr: "",
+        exitCode: 0,
+      });
+
+    await expect(runPrHunter({ event: readyEvent, step })).rejects.toThrow(/P3_EXECUTOR_JSON/);
+    expect(updateHuntRunMetadata).toHaveBeenCalledWith(
+      "/tmp/run-123/metadata.json",
+      expect.objectContaining({
+        status: "failed",
+        failurePhase: "executor",
+        executorResultCount: 1,
+        credibleFailureCount: 1,
+        totalScenarioCount: 2,
+        selectedScenarioCount: 2,
+        selectedScenarioIds: ["first", "second"],
+        failureReason: expect.stringContaining("P3_EXECUTOR_JSON"),
+      }),
+    );
+
+    expect(firstKill).toHaveBeenCalledTimes(1);
+    expect(secondKill).toHaveBeenCalledTimes(1);
+  });
+
   it("does not mask executor parse errors when Chrome cleanup throws", async () => {
     const kill = vi.fn(() => {
       throw new Error("cleanup failed");
