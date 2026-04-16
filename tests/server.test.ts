@@ -5,7 +5,10 @@ describe("server", () => {
   beforeEach(() => {
     process.env.INNGEST_EVENT_KEY = "test";
     process.env.INNGEST_SIGNING_KEY = "test";
-    process.env.CODEX_BIN = "/usr/local/bin/codex";
+    process.env.OPENAI_API_KEY = "sk-test";
+    process.env.TARGET_APP_URL = "http://localhost:3001";
+    process.env.SENTRY_WEBHOOK_SECRET = "sentry-secret";
+    process.env.LINEAR_API_KEY = "lin-api";
   });
 
   it("responds 200 on GET /health", async () => {
