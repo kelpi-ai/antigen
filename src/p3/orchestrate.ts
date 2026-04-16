@@ -12,16 +12,17 @@ import { buildHunterPlannerPrompt } from "../prompts/hunterPlanner";
 import { buildHunterReducerPrompt } from "../prompts/hunterReducer";
 import { launchChromeSession } from "./browser/session";
 import { writeCodexConfig } from "./codex/config";
-import type { ExecutorResult, HuntScenario, ReadyForReviewEvent, ReducerResult } from "./contracts";
+import type {
+  ExecutorResult,
+  HuntScenario,
+  PlannerResult,
+  ReadyForReviewEvent,
+  ReducerResult,
+} from "./contracts";
 
 interface RunPrHunterInput {
   event: ReadyForReviewEvent;
   step?: { run: (...args: any[]) => Promise<any> };
-}
-
-interface PlannerResult {
-  previewUrl: string | null;
-  scenarios: HuntScenario[];
 }
 
 async function runStep<T>(step: RunPrHunterInput["step"], name: string, fn: () => Promise<T>): Promise<T> {
@@ -127,63 +128,91 @@ export async function runPrHunter({
   event,
   step,
 }: RunPrHunterInput): Promise<ReducerResult> {
-  const run = await runStep(step, "create-run", () =>
-    createHuntRun({
-      artifactsRoot: env.ARTIFACTS_DIR,
-      prNumber: event.prNumber,
-      repo: event.repo,
-    }),
-  );
+  let runMetadataPath: string | null = null;
+  let runPhase = "planner";
+  let runPreviewUrl: string | null = null;
+  let plannerResult: PlannerResult | null = null;
 
-  const plannerOutput = await runStep(step, "run-planner", () =>
-    invokeCodex(
-      buildHunterPlannerPrompt({
-        event,
-        maxScenarios: env.MAX_SCENARIOS_PER_PR,
+  try {
+    const run = await runStep(step, "create-run", () =>
+      createHuntRun({
+        artifactsRoot: env.ARTIFACTS_DIR,
+        prNumber: event.prNumber,
+        repo: event.repo,
       }),
-      { cwd: run.runDir },
-    ),
-  );
-  const plannerResult = extractTaggedJson<PlannerResult>(
-    plannerOutput.stdout,
-    "P3_PLANNER_JSON",
-  );
+    );
+    runMetadataPath = run.metadataPath;
 
-  const previewUrl = plannerResult.previewUrl;
+    runPhase = "planner";
+    const plannerOutput = await runStep(step, "run-planner", () =>
+      invokeCodex(
+        buildHunterPlannerPrompt({
+          event,
+          maxScenarios: env.MAX_SCENARIOS_PER_PR,
+        }),
+        { cwd: run.runDir },
+      ),
+    );
+    plannerResult = extractTaggedJson<PlannerResult>(
+      plannerOutput.stdout,
+      "P3_PLANNER_JSON",
+    );
+    const previewUrl = plannerResult.previewUrl;
+    runPreviewUrl = previewUrl;
 
-  if (previewUrl === null) {
+    if (previewUrl === null) {
+      runPhase = "reducer";
+      return runReducer(
+        run.runDir,
+        run.metadataPath,
+        event,
+        null,
+        plannerResult.scenarios,
+        [],
+        [],
+        step,
+      );
+    }
+
+    runPhase = "executor-selection";
+    const selectedScenarios = selectTopScenarios(
+      plannerResult.scenarios,
+      env.MAX_SCENARIOS_PER_PR,
+    ).map((scenario) => ensureExecutableScenario(scenario));
+
+    runPhase = "executor";
+    const executorResults = await runWithConcurrencyLimit(
+      selectedScenarios,
+      env.P3_EXECUTOR_CONCURRENCY,
+      (scenario) =>
+        runWithScenario(run.runDir, event, previewUrl, scenario, step),
+    );
+
+    runPhase = "reducer";
     return runReducer(
       run.runDir,
       run.metadataPath,
       event,
-      null,
+      previewUrl,
       plannerResult.scenarios,
-      [],
-      [],
+      selectedScenarios,
+      executorResults,
       step,
     );
+  } catch (error) {
+    if (runMetadataPath) {
+      await Promise.resolve(
+        updateHuntRunMetadata(runMetadataPath, {
+          status: "failed",
+          previewUrl: runPreviewUrl,
+          failurePhase: runPhase,
+          failureReason: error instanceof Error ? error.message : String(error),
+          plannerScenarioCount: plannerResult?.scenarios.length ?? 0,
+          eventName: "github/pr.ready_for_review",
+        }),
+      ).catch(() => {});
+    }
+
+    throw error;
   }
-
-  const selectedScenarios = selectTopScenarios(
-    plannerResult.scenarios,
-    env.MAX_SCENARIOS_PER_PR,
-  ).map((scenario) => ensureExecutableScenario(scenario));
-
-  const executorResults = await runWithConcurrencyLimit(
-    selectedScenarios,
-    env.P3_EXECUTOR_CONCURRENCY,
-    (scenario) =>
-      runWithScenario(run.runDir, event, previewUrl, scenario, step),
-  );
-
-  return runReducer(
-    run.runDir,
-    run.metadataPath,
-    event,
-    plannerResult.previewUrl,
-    plannerResult.scenarios,
-    selectedScenarios,
-    executorResults,
-    step,
-  );
 }

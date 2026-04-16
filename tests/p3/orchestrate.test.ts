@@ -213,5 +213,13 @@ describe("runPrHunter", () => {
 
     await expect(runPrHunter({ event: readyEvent, step })).rejects.toThrow(/P3_EXECUTOR_JSON/);
     expect(kill).toHaveBeenCalledTimes(1);
+    expect(updateHuntRunMetadata).toHaveBeenCalledWith(
+      "/tmp/run-123/metadata.json",
+      expect.objectContaining({
+        status: "failed",
+        failurePhase: "executor",
+        failureReason: expect.stringContaining("P3_EXECUTOR_JSON"),
+      }),
+    );
   });
 });
