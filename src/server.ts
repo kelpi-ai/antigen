@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { inngest } from "./inngest/client";
 import { functions } from "./inngest";
 import { env } from "./config/env";
+import { mountLinearWebhook } from "./webhooks/linear";
 
 export function buildApp(): Hono {
   const app = new Hono();
@@ -14,6 +15,7 @@ export function buildApp(): Hono {
     "/api/inngest",
     inngestServe({ client: inngest, functions: [...functions] }),
   );
+  mountLinearWebhook(app);
   return app;
 }
 
