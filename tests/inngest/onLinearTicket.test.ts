@@ -263,4 +263,40 @@ describe("onLinearTicket", () => {
       "remove-worktree",
     ]);
   });
+
+  it("throws the cleanup failure when fixer succeeds but worktree removal fails", async () => {
+    const { steps, step } = createStepRecorder();
+    const result = {
+      status: "ok" as const,
+      prUrl: "https://example.test/pr/2",
+      testPath: "tests/fix2.spec.ts",
+      redEvidence: "red",
+      greenEvidence: "green",
+      regressionGuardEvidence: "guard",
+    };
+
+    fetchTicketContextMock.mockResolvedValue(ticketContext);
+    updateCheckoutMock.mockResolvedValue(undefined);
+    createWorktreeMock.mockResolvedValue({
+      path: "/tmp/wt/ABC-1-mnop",
+      branch: "fix/ABC-1-mnop",
+    });
+    buildFixerPromptMock.mockReturnValue("prompt-body");
+    runFixerMock.mockResolvedValue(result);
+    removeWorktreeMock.mockRejectedValue(new Error("cleanup failed"));
+
+    await expect(
+      runLinearTicketFlow({ event: { data: ticket }, step }),
+    ).rejects.toThrow(/cleanup failed/);
+
+    expect(steps).toEqual([
+      "fetch-ticket-context",
+      "update-checkout",
+      "create-worktree",
+      "build-prompt",
+      "run-fixer",
+      "remove-worktree",
+    ]);
+    expect(removeWorktreeMock).toHaveBeenCalledWith("/tmp/wt/ABC-1-mnop");
+  });
 });
