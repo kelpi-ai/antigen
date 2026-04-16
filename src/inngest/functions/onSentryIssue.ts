@@ -1,13 +1,16 @@
 import { readFile, writeFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
 import { inngest } from "../client";
 import { env } from "../../config/env";
+import { stitchScreenshotsToVideo } from "../../browser/stitch";
 import { buildReproducerPrompt, type ReproducerIssueContext } from "../../prompts/reproducer";
 import { createRun } from "../../runs/createRun";
-import { launchChromeSession, type ChromeSession } from "../../browser/session";
-import { startBrowserRecording, type BrowserRecording } from "../../browser/record";
-import { writeCodexConfig } from "../../codex/config";
-import { runCodexReproducer, type ReproducerResult } from "../../codex/reproducer";
+import {
+  runCodexReproducer,
+  type CodexMilestone,
+  type RecordingAssessment,
+  type ReproducerResult,
+  type ReproducerRunResult,
+} from "../../codex/reproducer";
 
 interface SentryIssue {
   id: string;
@@ -42,12 +45,6 @@ function stepRun<T>(step: StepRunner | undefined, name: string, fn: () => Promis
   return step.run(name, fn) as Promise<T>;
 }
 
-export function pickDebuggingPort(runId: string): number {
-  const hash = createHash("sha1").update(runId).digest("hex");
-  const short = Number.parseInt(hash.slice(0, 8), 16);
-  return 9222 + (Number.isNaN(short) ? 0 : short % 1000);
-}
-
 function asError(value: unknown): Error {
   if (value instanceof Error) {
     return value;
@@ -72,6 +69,7 @@ async function updateRunMetadata(input: {
   ticketUrl: string;
   finalUrl: string;
   videoPath: string;
+  recording: RecordingAssessment;
 }): Promise<void> {
   const rawMetadata = await readFile(input.metadataPath, "utf8");
   const existing = JSON.parse(rawMetadata);
@@ -81,6 +79,7 @@ async function updateRunMetadata(input: {
     ticketUrl: input.ticketUrl,
     finalUrl: input.finalUrl,
     videoPath: input.videoPath,
+    recording: input.recording,
   };
 
   await writeFile(input.metadataPath, JSON.stringify(next, null, 2));
@@ -102,40 +101,15 @@ export async function runSentryIssue(input: LifecycleDeps): Promise<ReproducerRe
     }),
   );
 
-  let chrome: ChromeSession | null = null;
-  let recording: BrowserRecording | null = null;
-  let runResult: ReproducerResult | null = null;
+  let runResult: ReproducerRunResult | null = null;
   let failure: Error | null = null;
   const cleanupErrors: Error[] = [];
 
   try {
-    const launchedChrome = await stepRun(step, "launch-chrome", () =>
-      launchChromeSession({
-        chromePath: env.CHROME_PATH ?? "google-chrome",
-        userDataDir: run.runDir,
-        debuggingPort: pickDebuggingPort(run.runId),
-      }),
-    );
-    chrome = launchedChrome;
-
-    await stepRun(step, "write-codex-config", () =>
-      writeCodexConfig({
-        codexDir: run.codexDir,
-        wsEndpoint: launchedChrome.wsEndpoint,
-      }),
-    );
-
-    recording = await stepRun(step, "start-recording", () =>
-      startBrowserRecording({
-        port: launchedChrome.debuggingPort,
-        outputPath: run.videoPath,
-        ffmpegBin: env.FFMPEG_BIN ?? "ffmpeg",
-      }),
-    );
-
     const prompt = buildReproducerPrompt({
       issue: mapIssueForPrompt(issue),
       targetAppUrl: env.TARGET_APP_URL,
+      screenshotsDir: run.screenshotsDir,
       videoPath: run.videoPath,
     });
 
@@ -143,25 +117,70 @@ export async function runSentryIssue(input: LifecycleDeps): Promise<ReproducerRe
       runCodexReproducer({
         prompt,
         workingDirectory: run.runDir,
+        eventsPath: run.codexEventsPath,
       }),
     );
   } catch (error) {
     failure = asError(error);
   }
 
-  if (recording) {
+  const codexMilestones: CodexMilestone[] = runResult?.milestones ?? [];
+  for (const milestone of codexMilestones) {
     try {
-      await stepRun(step, "stop-recording", () => recording.stop());
+      await stepRun(step, milestone.stepName, () => ({
+        summary: milestone.summary,
+        server: milestone.server,
+        tool: milestone.tool,
+        details: milestone.details ?? "",
+      }));
     } catch (error) {
       cleanupErrors.push(asError(error));
     }
   }
 
-  if (chrome) {
+  if (runResult?.recordingAssessment) {
+    const recordingAssessment = runResult.recordingAssessment;
     try {
-      await stepRun(step, "stop-chrome", () => chrome.process.kill("SIGKILL"));
+      await stepRun(step, "codex-recording-integrity", () => ({
+        status: recordingAssessment.status,
+        reason: recordingAssessment.reason,
+        openedNewPage: recordingAssessment.openedNewPage,
+      }));
     } catch (error) {
       cleanupErrors.push(asError(error));
+    }
+  }
+
+  if (runResult) {
+    const completedRun = runResult;
+
+    try {
+      const videoResult = await stepRun(step, "build-run-video", () =>
+        stitchScreenshotsToVideo({
+          screenshotsDir: run.screenshotsDir,
+          outputPath: run.videoPath,
+          ffmpegBin: env.FFMPEG_BIN ?? "ffmpeg",
+        }),
+      );
+
+      if (!videoResult.created) {
+        runResult = {
+          ...completedRun,
+          recordingAssessment: {
+            ...completedRun.recordingAssessment,
+            reason: `${completedRun.recordingAssessment.reason} No screenshots were saved, so no synthesized video was created.`,
+          },
+        };
+      }
+    } catch (error) {
+      runResult = {
+        ...completedRun,
+        recordingAssessment: {
+          status: "suspect",
+          reason: `${completedRun.recordingAssessment.reason} Video synthesis failed: ${asError(error).message}`,
+          openedNewPage: completedRun.recordingAssessment.openedNewPage,
+        },
+      };
     }
   }
 
@@ -173,6 +192,12 @@ export async function runSentryIssue(input: LifecycleDeps): Promise<ReproducerRe
         ticketUrl: runResult?.ticketUrl ?? "",
         finalUrl: runResult?.finalUrl ?? env.TARGET_APP_URL,
         videoPath: run.videoPath,
+        recording:
+          runResult?.recordingAssessment ?? {
+            status: "pending",
+            reason: "Awaiting Codex run analysis",
+            openedNewPage: false,
+          },
       }),
     );
   } catch (error) {

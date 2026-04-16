@@ -31,6 +31,15 @@ function asError(value: unknown): Error {
   return new Error(String(value));
 }
 
+function isExpectedDevToolsDisconnectError(value: unknown): boolean {
+  const message = asError(value).message;
+  return (
+    message.includes("WebSocket connection closed") ||
+    message.includes("Target closed") ||
+    message.includes("Session closed")
+  );
+}
+
 function formatFfmpegExitError(input: {
   code: number | null;
   signal: NodeJS.Signals | null;
@@ -182,6 +191,16 @@ export async function startBrowserRecording(input: {
       stopped = true;
 
       const cleanupErrors: Error[] = [];
+      let stopScreencastError: Error | null = null;
+
+      try {
+        await Promise.resolve(client.Page.stopScreencast());
+      } catch (error) {
+        const nextError = asError(error);
+        if (!isExpectedDevToolsDisconnectError(nextError)) {
+          stopScreencastError = nextError;
+        }
+      }
 
       if (typeof unsubscribeFrame === "function") {
         try {
@@ -196,14 +215,23 @@ export async function startBrowserRecording(input: {
         cleanupErrors.push(asError(error));
       }
       const results = await Promise.allSettled([
-        Promise.resolve(client.Page.stopScreencast()),
         ffmpegCompletion,
         Promise.resolve(client.close()),
       ]);
-      for (const result of results) {
+      for (const [index, result] of results.entries()) {
         if (result.status === "rejected") {
+          if (
+            index === 1 &&
+            isExpectedDevToolsDisconnectError(result.reason)
+          ) {
+            continue;
+          }
           cleanupErrors.push(asError(result.reason));
         }
+      }
+
+      if (stopScreencastError) {
+        cleanupErrors.unshift(stopScreencastError);
       }
 
       if (cleanupErrors.length > 0) {

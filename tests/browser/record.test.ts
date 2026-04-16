@@ -155,6 +155,46 @@ describe("startBrowserRecording", () => {
     expect(settled).toBe(true);
   });
 
+  it("waits for screencast shutdown before ending ffmpeg stdin", async () => {
+    let resolveStopScreencast: (() => void) | undefined;
+    const page = {
+      startScreencast: vi.fn(),
+      stopScreencast: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveStopScreencast = resolve;
+          }),
+      ),
+      screencastFrameAck: vi.fn(),
+      screencastFrame: vi.fn(),
+    };
+    const client = { Page: page, Runtime: { enable: vi.fn() }, close: vi.fn() };
+    CDPMock.mockResolvedValue(client);
+
+    const ffmpeg = fakeFfmpegProcess();
+    ffmpeg.stdin.end.mockImplementation(() => {
+      ffmpeg.emit("close", 0, null);
+    });
+    spawnMock.mockReturnValue(ffmpeg);
+
+    const recording = await startBrowserRecording({
+      port: 9222,
+      outputPath: "/tmp/browser.mp4",
+      ffmpegBin: "/opt/homebrew/bin/ffmpeg",
+    });
+
+    const stopPromise = recording.stop();
+    await Promise.resolve();
+
+    expect(page.stopScreencast).toHaveBeenCalledTimes(1);
+    expect(ffmpeg.stdin.end).not.toHaveBeenCalled();
+
+    resolveStopScreencast?.();
+    await stopPromise;
+
+    expect(ffmpeg.stdin.end).toHaveBeenCalledTimes(1);
+  });
+
   it("rolls back ffmpeg and CDP client when startScreencast rejects", async () => {
     const unsubscribe = vi.fn();
     const page = {
@@ -236,6 +276,36 @@ describe("startBrowserRecording", () => {
     });
 
     await expect(recording.stop()).rejects.toThrow(/stop failed/);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(ffmpeg.stdin.end).toHaveBeenCalledTimes(1);
+    expect(client.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores expected DevTools websocket close errors during stop()", async () => {
+    const disconnectError = new Error("WebSocket connection closed");
+    const unsubscribe = vi.fn();
+    const page = {
+      startScreencast: vi.fn(),
+      stopScreencast: vi.fn().mockRejectedValue(disconnectError),
+      screencastFrameAck: vi.fn(),
+      screencastFrame: vi.fn(() => unsubscribe),
+    };
+    const client = { Page: page, Runtime: { enable: vi.fn() }, close: vi.fn().mockRejectedValue(disconnectError) };
+    CDPMock.mockResolvedValue(client);
+
+    const ffmpeg = fakeFfmpegProcess();
+    ffmpeg.stdin.end.mockImplementation(() => {
+      ffmpeg.emit("close", 0, null);
+    });
+    spawnMock.mockReturnValue(ffmpeg);
+
+    const recording = await startBrowserRecording({
+      port: 9222,
+      outputPath: "/tmp/browser.mp4",
+      ffmpegBin: "/opt/homebrew/bin/ffmpeg",
+    });
+
+    await expect(recording.stop()).resolves.toBeUndefined();
     expect(unsubscribe).toHaveBeenCalledTimes(1);
     expect(ffmpeg.stdin.end).toHaveBeenCalledTimes(1);
     expect(client.close).toHaveBeenCalledTimes(1);

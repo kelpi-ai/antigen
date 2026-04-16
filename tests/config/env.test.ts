@@ -9,7 +9,6 @@ describe("loadEnv", () => {
   it("parses valid env", () => {
     process.env.INNGEST_EVENT_KEY = "test-key";
     process.env.INNGEST_SIGNING_KEY = "signkey_test";
-    process.env.OPENAI_API_KEY = "sk-test";
     process.env.TARGET_APP_URL = "http://localhost:3001";
     process.env.SENTRY_WEBHOOK_SECRET = "sentry-secret";
     process.env.LINEAR_API_KEY = "lin_api_xxx";
@@ -17,7 +16,6 @@ describe("loadEnv", () => {
 
     const env = loadEnv();
     expect(env.INNGEST_EVENT_KEY).toBe("test-key");
-    expect(env.OPENAI_API_KEY).toBe("sk-test");
     expect(env.TARGET_APP_URL).toBe("http://localhost:3001");
     expect(env.SENTRY_WEBHOOK_SECRET).toBe("sentry-secret");
     expect(env.LINEAR_API_KEY).toBe("lin_api_xxx");
@@ -27,7 +25,6 @@ describe("loadEnv", () => {
   it("defaults PORT to 3000", () => {
     process.env.INNGEST_EVENT_KEY = "test-key";
     process.env.INNGEST_SIGNING_KEY = "signkey_test";
-    process.env.OPENAI_API_KEY = "sk-test";
     process.env.TARGET_APP_URL = "http://localhost:3001";
     process.env.SENTRY_WEBHOOK_SECRET = "sentry-secret";
     process.env.LINEAR_API_KEY = "lin_api_xxx";
@@ -38,7 +35,6 @@ describe("loadEnv", () => {
   it("throws on missing required var", () => {
     delete process.env.INNGEST_EVENT_KEY;
     process.env.INNGEST_SIGNING_KEY = "signkey_test";
-    process.env.OPENAI_API_KEY = "sk-test";
     process.env.TARGET_APP_URL = "http://localhost:3001";
     process.env.SENTRY_WEBHOOK_SECRET = "sentry-secret";
     process.env.LINEAR_API_KEY = "lin_api_xxx";
@@ -48,7 +44,6 @@ describe("loadEnv", () => {
   it("parses localhost demo env vars", () => {
     process.env.INNGEST_EVENT_KEY = "x";
     process.env.INNGEST_SIGNING_KEY = "x";
-    process.env.OPENAI_API_KEY = "sk-test";
     process.env.TARGET_APP_URL = "http://localhost:3001";
     process.env.SENTRY_WEBHOOK_SECRET = "sentry-secret";
     process.env.LINEAR_API_KEY = "lin_api_xxx";
@@ -57,7 +52,6 @@ describe("loadEnv", () => {
     process.env.FFMPEG_BIN = "/opt/homebrew/bin/ffmpeg";
 
     const env = loadEnv();
-    expect(env.OPENAI_API_KEY).toBe("sk-test");
     expect(env.TARGET_APP_URL).toBe("http://localhost:3001");
     expect(env.ARTIFACTS_DIR).toBe(".incident-loop-artifacts");
   });
@@ -65,7 +59,6 @@ describe("loadEnv", () => {
   it("treats blank browser/ffmpeg paths as unset", () => {
     process.env.INNGEST_EVENT_KEY = "x";
     process.env.INNGEST_SIGNING_KEY = "x";
-    process.env.OPENAI_API_KEY = "sk-test";
     process.env.TARGET_APP_URL = "http://localhost:3001";
     process.env.SENTRY_WEBHOOK_SECRET = "sentry-secret";
     process.env.LINEAR_API_KEY = "lin_api_xxx";

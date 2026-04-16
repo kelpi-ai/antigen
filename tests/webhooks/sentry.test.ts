@@ -18,7 +18,6 @@ describe("mountSentryWebhook", () => {
     sendMock.mockReset();
     process.env.INNGEST_EVENT_KEY = "x";
     process.env.INNGEST_SIGNING_KEY = "x";
-    process.env.OPENAI_API_KEY = "sk-test";
     process.env.TARGET_APP_URL = "http://localhost:3001";
     process.env.SENTRY_WEBHOOK_SECRET = "test-secret";
     process.env.LINEAR_API_KEY = "lin-api";

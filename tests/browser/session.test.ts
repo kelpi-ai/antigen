@@ -8,7 +8,7 @@ vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 
-import { launchChromeSession } from "../../src/browser/session";
+import { connectChromeSession, launchChromeSession } from "../../src/browser/session";
 
 function fakeProcess(): ChildProcess & EventEmitter {
   const proc = new EventEmitter() as ChildProcess & EventEmitter;
@@ -40,6 +40,7 @@ describe("launchChromeSession", () => {
       chromePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
       userDataDir: "/tmp/run-profile",
       debuggingPort: 9222,
+      initialUrl: "http://localhost:3002",
     });
 
     expect(spawnMock).toHaveBeenCalledWith(
@@ -49,12 +50,13 @@ describe("launchChromeSession", () => {
         "--user-data-dir=/tmp/run-profile",
         "--no-first-run",
         "--no-default-browser-check",
-        "about:blank",
+        "http://localhost:3002",
       ]),
       expect.any(Object),
     );
     expect(session).toEqual({
       process: proc,
+      ownsProcess: true,
       debuggingPort: 9222,
       wsEndpoint: "ws://127.0.0.1:9222/devtools/browser/test",
     });
@@ -153,5 +155,28 @@ describe("launchChromeSession", () => {
     );
     await vi.advanceTimersByTimeAsync(5200);
     await rejection;
+  });
+
+  it("attaches to an existing remote-debugging browser", async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/existing" }),
+    });
+
+    const session = await connectChromeSession({
+      debuggingUrl: "http://127.0.0.1:9222",
+    });
+
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:9222/json/version",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(session).toEqual({
+      process: null,
+      ownsProcess: false,
+      debuggingPort: 9222,
+      wsEndpoint: "ws://127.0.0.1:9222/devtools/browser/existing",
+    });
   });
 });

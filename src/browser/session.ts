@@ -5,7 +5,8 @@ const WS_ENDPOINT_POLL_INTERVAL_MS = 50;
 const WS_ENDPOINT_REQUEST_TIMEOUT_MS = 500;
 
 export interface ChromeSession {
-  process: ReturnType<typeof spawn>;
+  process: ReturnType<typeof spawn> | null;
+  ownsProcess: boolean;
   debuggingPort: number;
   wsEndpoint: string;
 }
@@ -40,14 +41,17 @@ async function fetchJsonVersionWithTimeout(input: {
 }
 
 async function resolveWebSocketEndpoint(input: {
-  debuggingPort: number;
-  process: ReturnType<typeof spawn>;
+  endpointUrl: string;
+  process?: ReturnType<typeof spawn>;
 }): Promise<string> {
-  const endpointUrl = `http://127.0.0.1:${input.debuggingPort}/json/version`;
   const deadline = Date.now() + WS_ENDPOINT_TIMEOUT_MS;
 
   while (Date.now() < deadline) {
-    if (input.process.exitCode !== null && input.process.exitCode !== undefined) {
+    if (
+      input.process &&
+      input.process.exitCode !== null &&
+      input.process.exitCode !== undefined
+    ) {
       throw new Error("chrome exited before remote debugging endpoint became available");
     }
 
@@ -57,7 +61,7 @@ async function resolveWebSocketEndpoint(input: {
         Math.min(WS_ENDPOINT_REQUEST_TIMEOUT_MS, deadline - Date.now()),
       );
       const response = await fetchJsonVersionWithTimeout({
-        endpointUrl,
+        endpointUrl: input.endpointUrl,
         timeoutMs: requestTimeoutMs,
       });
       if (response.ok) {
@@ -73,13 +77,14 @@ async function resolveWebSocketEndpoint(input: {
     await sleep(WS_ENDPOINT_POLL_INTERVAL_MS);
   }
 
-  throw new Error(`timed out waiting for Chrome debugger endpoint at ${endpointUrl}`);
+  throw new Error(`timed out waiting for Chrome debugger endpoint at ${input.endpointUrl}`);
 }
 
 export async function launchChromeSession(input: {
   chromePath: string;
   userDataDir: string;
   debuggingPort: number;
+  initialUrl?: string;
 }): Promise<ChromeSession> {
   const proc = spawn(
     input.chromePath,
@@ -88,7 +93,7 @@ export async function launchChromeSession(input: {
       `--user-data-dir=${input.userDataDir}`,
       "--no-first-run",
       "--no-default-browser-check",
-      "about:blank",
+      input.initialUrl ?? "about:blank",
     ],
     { stdio: ["ignore", "pipe", "pipe"] },
   );
@@ -104,7 +109,7 @@ export async function launchChromeSession(input: {
   try {
     const wsEndpoint = await Promise.race([
       resolveWebSocketEndpoint({
-        debuggingPort: input.debuggingPort,
+        endpointUrl: `http://127.0.0.1:${input.debuggingPort}/json/version`,
         process: proc,
       }),
       startupError,
@@ -112,6 +117,7 @@ export async function launchChromeSession(input: {
 
     return {
       process: proc,
+      ownsProcess: true,
       debuggingPort: input.debuggingPort,
       wsEndpoint,
     };
@@ -123,4 +129,24 @@ export async function launchChromeSession(input: {
       proc.off("error", onProcessError);
     }
   }
+}
+
+export async function connectChromeSession(input: {
+  debuggingUrl: string;
+}): Promise<ChromeSession> {
+  const url = new URL(input.debuggingUrl);
+  const debuggingPort = Number(url.port || (url.protocol === "https:" ? 443 : 80));
+  if (!Number.isInteger(debuggingPort) || debuggingPort <= 0) {
+    throw new Error(`Invalid Chrome debugging URL: ${input.debuggingUrl}`);
+  }
+
+  const versionUrl = new URL("/json/version", url).toString();
+  const wsEndpoint = await resolveWebSocketEndpoint({ endpointUrl: versionUrl });
+
+  return {
+    process: null,
+    ownsProcess: false,
+    debuggingPort,
+    wsEndpoint,
+  };
 }
