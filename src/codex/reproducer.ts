@@ -72,6 +72,14 @@ export async function runCodexReproducer(input: {
   });
 
   const turn = await thread.run(input.prompt, { outputSchema: reproducerOutputSchema });
-  const parsed = JSON.parse(turn.finalResponse);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(turn.finalResponse);
+  } catch (error) {
+    throw new Error(
+      `Codex returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
   return ReproducerResultSchema.parse(parsed);
 }

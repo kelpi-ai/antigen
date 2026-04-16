@@ -4,10 +4,10 @@ import { inngest } from "../client";
 import { env } from "../../config/env";
 import { buildReproducerPrompt, type ReproducerIssueContext } from "../../prompts/reproducer";
 import { createRun } from "../../runs/createRun";
-import { launchChromeSession } from "../../browser/session";
-import { startBrowserRecording } from "../../browser/record";
+import { launchChromeSession, type ChromeSession } from "../../browser/session";
+import { startBrowserRecording, type BrowserRecording } from "../../browser/record";
 import { writeCodexConfig } from "../../codex/config";
-import { runCodexReproducer } from "../../codex/reproducer";
+import { runCodexReproducer, type ReproducerResult } from "../../codex/reproducer";
 
 interface SentryIssue {
   id: string;
@@ -23,14 +23,14 @@ interface StepRunner {
   run(name: string, fn: () => unknown): Promise<unknown>;
 }
 
-interface InngestEvent {
-  data?: {
+interface SentryIssueEvent {
+  data: {
     issue?: SentryIssue;
   };
 }
 
 interface LifecycleDeps {
-  event: InngestEvent | (InngestEvent & Record<string, unknown>);
+  event: SentryIssueEvent;
   step?: StepRunner;
 }
 
@@ -46,6 +46,13 @@ export function pickDebuggingPort(runId: string): number {
   const hash = createHash("sha1").update(runId).digest("hex");
   const short = Number.parseInt(hash.slice(0, 8), 16);
   return 9222 + (Number.isNaN(short) ? 0 : short % 1000);
+}
+
+function asError(value: unknown): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  return new Error(String(value));
 }
 
 function mapIssueForPrompt(issue: SentryIssue): ReproducerIssueContext {
@@ -79,7 +86,7 @@ async function updateRunMetadata(input: {
   await writeFile(input.metadataPath, JSON.stringify(next, null, 2));
 }
 
-export async function runSentryIssue(input: LifecycleDeps): Promise<unknown> {
+export async function runSentryIssue(input: LifecycleDeps): Promise<ReproducerResult> {
   const { event, step } = input;
   if (!event.data?.issue) {
     throw new Error("Sentry issue payload missing required issue data");
@@ -95,33 +102,37 @@ export async function runSentryIssue(input: LifecycleDeps): Promise<unknown> {
     }),
   );
 
-  const chrome = await stepRun(step, "launch-chrome", () =>
-    launchChromeSession({
-      chromePath: env.CHROME_PATH ?? "google-chrome",
-      userDataDir: run.runDir,
-      debuggingPort: pickDebuggingPort(run.runId),
-    }),
-  );
-
-  await stepRun(step, "write-codex-config", () =>
-    writeCodexConfig({
-      codexDir: run.codexDir,
-      wsEndpoint: chrome.wsEndpoint,
-    }),
-  );
-
-  const recording = await stepRun(step, "start-recording", () =>
-    startBrowserRecording({
-      port: chrome.debuggingPort,
-      outputPath: run.videoPath,
-      ffmpegBin: env.FFMPEG_BIN ?? "ffmpeg",
-    }),
-  );
-
-  let runResult: Awaited<ReturnType<typeof runCodexReproducer>> | null = null;
+  let chrome: ChromeSession | null = null;
+  let recording: BrowserRecording | null = null;
+  let runResult: ReproducerResult | null = null;
   let failure: Error | null = null;
+  const cleanupErrors: Error[] = [];
 
   try {
+    const launchedChrome = await stepRun(step, "launch-chrome", () =>
+      launchChromeSession({
+        chromePath: env.CHROME_PATH ?? "google-chrome",
+        userDataDir: run.runDir,
+        debuggingPort: pickDebuggingPort(run.runId),
+      }),
+    );
+    chrome = launchedChrome;
+
+    await stepRun(step, "write-codex-config", () =>
+      writeCodexConfig({
+        codexDir: run.codexDir,
+        wsEndpoint: launchedChrome.wsEndpoint,
+      }),
+    );
+
+    recording = await stepRun(step, "start-recording", () =>
+      startBrowserRecording({
+        port: launchedChrome.debuggingPort,
+        outputPath: run.videoPath,
+        ffmpegBin: env.FFMPEG_BIN ?? "ffmpeg",
+      }),
+    );
+
     const prompt = buildReproducerPrompt({
       issue: mapIssueForPrompt(issue),
       targetAppUrl: env.TARGET_APP_URL,
@@ -135,24 +146,49 @@ export async function runSentryIssue(input: LifecycleDeps): Promise<unknown> {
       }),
     );
   } catch (error) {
-    failure = error instanceof Error ? error : new Error(String(error));
+    failure = asError(error);
   }
 
-  await stepRun(step, "stop-recording", () => recording.stop());
-  await stepRun(step, "stop-chrome", () => chrome.process.kill("SIGKILL"));
+  if (recording) {
+    try {
+      await stepRun(step, "stop-recording", () => recording.stop());
+    } catch (error) {
+      cleanupErrors.push(asError(error));
+    }
+  }
 
-  await stepRun(step, "update-metadata", () =>
-    updateRunMetadata({
-      metadataPath: run.metadataPath,
-      status: runResult?.status ?? "failed",
-      ticketUrl: runResult?.ticketUrl ?? "",
-      finalUrl: runResult?.finalUrl ?? env.TARGET_APP_URL,
-      videoPath: run.videoPath,
-    }),
-  );
+  if (chrome) {
+    try {
+      await stepRun(step, "stop-chrome", () => chrome.process.kill("SIGKILL"));
+    } catch (error) {
+      cleanupErrors.push(asError(error));
+    }
+  }
+
+  try {
+    await stepRun(step, "update-metadata", () =>
+      updateRunMetadata({
+        metadataPath: run.metadataPath,
+        status: runResult?.status ?? "failed",
+        ticketUrl: runResult?.ticketUrl ?? "",
+        finalUrl: runResult?.finalUrl ?? env.TARGET_APP_URL,
+        videoPath: run.videoPath,
+      }),
+    );
+  } catch (error) {
+    cleanupErrors.push(asError(error));
+  }
 
   if (failure) {
     throw failure;
+  }
+
+  if (cleanupErrors.length > 0) {
+    throw cleanupErrors[0];
+  }
+
+  if (!runResult) {
+    throw new Error("Codex reproducer did not return a result");
   }
 
   return runResult;
@@ -162,6 +198,6 @@ export const onSentryIssue = inngest.createFunction(
   { id: "on-sentry-issue" },
   { event: "sentry/issue.created" },
   async ({ event, step }) => {
-    return runSentryIssue({ event, step });
+    return runSentryIssue({ event: event as SentryIssueEvent, step });
   },
 );

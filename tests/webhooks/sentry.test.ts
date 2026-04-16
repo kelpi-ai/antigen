@@ -131,4 +131,26 @@ describe("mountSentryWebhook", () => {
     expect(res.status).toBe(401);
     expect(sendMock).not.toHaveBeenCalled();
   });
+
+  it("rejects issue payloads without an id", async () => {
+    const body = JSON.stringify({
+      action: "created",
+      data: { issue: { title: "TypeError" } },
+    });
+    const app = new Hono();
+    mountSentryWebhook(app);
+
+    const res = await app.request("/webhooks/sentry", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "sentry-hook-resource": "issue",
+        "sentry-hook-signature": sign(body, "test-secret"),
+      },
+      body,
+    });
+
+    expect(res.status).toBe(400);
+    expect(sendMock).not.toHaveBeenCalled();
+  });
 });

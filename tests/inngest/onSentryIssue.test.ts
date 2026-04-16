@@ -224,4 +224,54 @@ describe("onSentryIssue", () => {
     expect(nextMetadata.ticketUrl).toBe("");
     expect(nextMetadata.finalUrl).toBe("http://localhost:3001");
   });
+
+  it("cleans up chrome and writes failed metadata when setup fails after launch", async () => {
+    const run = {
+      runId: "run-1234",
+      runDir: "/tmp/run-1234",
+      codexDir: "/tmp/run-1234/.codex",
+      videoPath: "/tmp/run-1234/browser.mp4",
+      metadataPath: "/tmp/run-1234/metadata.json",
+    };
+    const chromeProcessKill = vi.fn();
+    const expectedPort = pickDebuggingPort(run.runId);
+
+    createRunMock.mockResolvedValue(run);
+    launchChromeSessionMock.mockResolvedValue({
+      process: { kill: chromeProcessKill },
+      debuggingPort: expectedPort,
+      wsEndpoint: "ws://127.0.0.1:9222/devtools/browser/test",
+    });
+    writeCodexConfigMock.mockRejectedValue(new Error("config failed"));
+    readFileMock.mockResolvedValue(
+      JSON.stringify({
+        status: "created",
+        sentryIssueId: "SENTRY-123",
+      }),
+    );
+    writeFileMock.mockResolvedValue(undefined);
+
+    const event = {
+      data: {
+        issue: {
+          id: "SENTRY-123",
+          title: "TypeError",
+          web_url: "https://sentry.io/issues/123/",
+          culprit: "checkout.applyCoupon",
+          environment: "production",
+          release: "app@1.4.2",
+        },
+      },
+    };
+
+    await expect(runSentryIssue({ event })).rejects.toThrow(/config failed/);
+
+    expect(chromeProcessKill).toHaveBeenCalledWith("SIGKILL");
+    expect(writeFileMock).toHaveBeenCalledTimes(1);
+    const [, metadataArg] = writeFileMock.mock.calls[0] as [string, string];
+    const nextMetadata = JSON.parse(metadataArg);
+    expect(nextMetadata.status).toBe("failed");
+    expect(nextMetadata.ticketUrl).toBe("");
+    expect(nextMetadata.finalUrl).toBe("http://localhost:3001");
+  });
 });

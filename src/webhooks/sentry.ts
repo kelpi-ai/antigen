@@ -46,6 +46,10 @@ export function mountSentryWebhook(app: Hono): void {
     }
 
     const issue = parsed.data.issue;
+    if (typeof issue.id !== "string" || issue.id.length === 0) {
+      return c.json({ accepted: false, error: "invalid issue payload" }, 400);
+    }
+
     const issueUrl = issue.web_url ?? issue.permalink;
 
     await inngest.send({

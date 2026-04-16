@@ -86,4 +86,17 @@ describe("runCodexReproducer", () => {
       }),
     ).rejects.toThrow();
   });
+
+  it("rejects malformed JSON from Codex", async () => {
+    runMock.mockResolvedValue({
+      finalResponse: "not-json",
+    });
+
+    await expect(
+      runCodexReproducer({
+        prompt: "hello",
+        workingDirectory: "/tmp/run",
+      }),
+    ).rejects.toThrow(/invalid JSON/i);
+  });
 });
