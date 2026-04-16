@@ -46,6 +46,26 @@ describe("fixer", () => {
   });
 
   describe("runCodexTask", () => {
+    it("uses minimal thread options and only sets workingDirectory when cwd is provided", async () => {
+      startThreadMock.mockReturnValue({ run: runMock });
+      runMock.mockResolvedValue({ finalResponse: "done" });
+
+      await runCodexTask("fix this", "/tmp/repo");
+
+      expect(startThreadMock).toHaveBeenCalledWith({ workingDirectory: "/tmp/repo" });
+      expect(runMock).toHaveBeenCalledWith("fix this");
+    });
+
+    it("passes no thread options when cwd is not provided", async () => {
+      startThreadMock.mockReturnValue({ run: runMock });
+      runMock.mockResolvedValue({ finalResponse: "done" });
+
+      await runCodexTask("fix this");
+
+      expect(startThreadMock).toHaveBeenCalledWith(undefined);
+      expect(runMock).toHaveBeenCalledWith("fix this");
+    });
+
     it("returns turn.finalResponse", async () => {
       startThreadMock.mockReturnValue({ run: runMock });
       runMock.mockResolvedValue({ finalResponse: "done" });
@@ -53,7 +73,7 @@ describe("fixer", () => {
       const response = await runCodexTask("fix this", "/tmp/repo");
 
       expect(response).toBe("done");
-      expect(startThreadMock).toHaveBeenCalledWith(expect.objectContaining({ workingDirectory: "/tmp/repo" }));
+      expect(startThreadMock).toHaveBeenCalledWith({ workingDirectory: "/tmp/repo" });
       expect(runMock).toHaveBeenCalledWith("fix this");
     });
   });
@@ -71,7 +91,7 @@ describe("fixer", () => {
         cwd: "/tmp/repo2",
       });
 
-      expect(startThreadMock).toHaveBeenCalledWith(expect.objectContaining({ workingDirectory: "/tmp/repo2" }));
+      expect(startThreadMock).toHaveBeenCalledWith({ workingDirectory: "/tmp/repo2" });
       expect(result).toEqual({
         status: "ok",
         prUrl: "https://example.test/pr/2",

@@ -12,11 +12,7 @@ export interface FixerResult {
 
 export async function runCodexTask(prompt: string, cwd?: string): Promise<string> {
   const codex = new Codex();
-  const thread = codex.startThread({
-    ...(cwd ? { workingDirectory: cwd } : {}),
-    sandboxMode: "workspace-write",
-    approvalPolicy: "never",
-  });
+  const thread = codex.startThread(cwd ? { workingDirectory: cwd } : undefined);
   const turn = await thread.run(prompt);
   return turn.finalResponse;
 }
