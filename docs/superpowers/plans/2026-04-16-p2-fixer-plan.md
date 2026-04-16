@@ -1,65 +1,50 @@
-# P2 Fixer Implementation Plan
+# P2 Localhost Fixer Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the P2 fixer flow so a bug-labeled Linear issue can trigger a durable Inngest workflow that fetches live ticket context via Linear MCP, writes a regression test first, proves red-green, proves the fix does not break already-correct behavior, optionally verifies browser-visible fixes with Chrome MCP, and opens a draft PR from an isolated git worktree.
+**Goal:** Build a localhost-aligned P2 fixer flow where a bug-labeled Linear issue triggers a durable workflow that refreshes the latest GitHub-backed checkout, creates an isolated worktree, writes and verifies a regression fix locally against the running localhost app, and opens a draft PR through GitHub MCP.
 
-**Architecture:** `/webhooks/linear` is an adapter that normalizes raw Linear webhooks into a repo-owned `linear/ticket.created` event carrying only routing fields. `on-linear-ticket` fetches live ticket context through Codex + Linear MCP, including browser / OS / viewport hints when they exist, creates a worktree, builds a TDD-enforcing fixer prompt, runs Codex in the worktree, parses a structured completion payload, and always removes the worktree in a `finally` path. The regression test in `tests/regressions/` is the durable knowledge base, and every successful run must also prove the fix did not regress already-correct behavior.
+**Architecture:** `/webhooks/linear` stays a thin adapter that emits a repo-owned `linear/ticket.created` event. `on-linear-ticket` fetches live ticket context through Linear MCP, refreshes the persistent checkout from the tracked GitHub remote, creates a worktree from the refreshed base, builds a localhost-aware fixer prompt, runs the Codex fixer through the SDK path inside that worktree, validates structured red-green-regression proof, and always removes the worktree in a `finally` path. Local git handles checkout refresh, worktree creation, commit, and push; GitHub MCP handles draft PR creation.
 
-**Tech Stack:** TypeScript 5.x, Node 20+, pnpm, Inngest, Hono, zod, vitest, Codex CLI, Linear MCP, Chrome MCP
+**Tech Stack:** TypeScript 5.x, Node 20+, pnpm, Hono, Inngest, zod, vitest, OpenAI Agents SDK, Codex SDK path, Linear MCP, GitHub MCP, Chrome DevTools MCP, Playwright WebKit where environment hints require it
+
+**Spec:** `docs/superpowers/specs/2026-04-16-p2-fixer-design.md`
+
+**Assumption:** `docs/superpowers/plans/2026-04-16-incident-loop-localhost-plan.md` has already been implemented. This P2 plan extends that localhost runtime; it does not reintroduce the old `CODEX_BIN` / subprocess architecture.
 
 ---
 
 ## File Structure
 
-### Create
-
 ```text
+.env.example                              # add P2 repo and webhook vars
+README.md                                 # add localhost P2 validation notes
+
 src/
-  codex/taggedJson.ts
-  git/worktree.ts
-  linear/fetchTicketContext.ts
-  prompts/fixer.ts
-  prompts/linearTicketContext.ts
-  webhooks/linear.ts
-  webhooks/verify.ts
-  inngest/functions/onLinearTicket.ts
+  config/env.ts                           # extend localhost env schema with P2 vars
+  git/updateCheckout.ts                   # refresh persistent checkout from GitHub remote
+  git/worktree.ts                         # create/remove worktrees from refreshed base
+  linear/fetchTicketContext.ts            # use Linear MCP to fetch live ticket context
+  prompts/fixer.ts                        # localhost-aware fixer prompt
+  codex/fixer.ts                          # invoke Codex fixer via SDK and parse FIXER_RESULT
+  webhooks/linear.ts                      # Linear bug ticket webhook adapter
+  inngest/functions/onLinearTicket.ts     # durable P2 orchestrator
+  inngest/index.ts                        # register on-linear-ticket
+  server.ts                               # mount /webhooks/linear
 
 tests/
-  codex/taggedJson.test.ts
+  config/env.test.ts
+  git/updateCheckout.test.ts
   git/worktree.test.ts
   linear/fetchTicketContext.test.ts
   prompts/fixer.test.ts
-  prompts/linearTicketContext.test.ts
+  codex/fixer.test.ts
   webhooks/linear.test.ts
-  webhooks/verify.test.ts
   inngest/onLinearTicket.test.ts
+  server.test.ts
 ```
 
-### Modify
-
-```text
-src/config/env.ts
-.env.example
-src/inngest/index.ts
-src/server.ts
-README.md
-tests/config/env.test.ts
-tests/server.test.ts
-```
-
-### Responsibilities
-
-- `src/webhooks/verify.ts` owns HMAC verification so the webhook route stays focused on payload normalization.
-- `src/webhooks/linear.ts` converts the raw Linear webhook into the minimal repo-owned event shape `{ ticketId, identifier, module, url }`.
-- `src/codex/taggedJson.ts` parses machine-readable one-line JSON output from Codex so both context-fetch and fixer completion share the same contract.
-- `src/prompts/linearTicketContext.ts` asks Codex to use Linear MCP and return the latest ticket context, including environment hints, in a strict tagged JSON format.
-- `src/linear/fetchTicketContext.ts` invokes Codex for the Linear MCP fetch and returns typed ticket context to the Inngest function.
-- `src/git/worktree.ts` creates and removes isolated git worktrees for fixer runs.
-- `src/prompts/fixer.ts` builds the main fixer prompt, including strict red-green requirements, a regression guard, the `systematic-debugging` fallback, and optional Chrome MCP verification.
-- `src/inngest/functions/onLinearTicket.ts` sequences the durable workflow and owns cleanup.
-
-## Task 1 — Extend Env For P2
+## Task 1 — Extend The Localhost Env Schema For P2
 
 **Files:**
 - Modify: `src/config/env.ts`
@@ -71,19 +56,26 @@ tests/server.test.ts
 Append this test to `tests/config/env.test.ts`:
 
 ```ts
-  it("parses Linear webhook + worktree vars", () => {
-    process.env.INNGEST_EVENT_KEY = "x";
-    process.env.INNGEST_SIGNING_KEY = "x";
-    process.env.CODEX_BIN = "/usr/local/bin/codex";
-    process.env.LINEAR_WEBHOOK_SECRET = "lin-sec";
-    process.env.TARGET_REPO_PATH = "/tmp/target-repo";
-    process.env.TARGET_REPO_WORKTREE_ROOT = "/tmp/worktrees";
+it("parses localhost P2 repo vars", () => {
+  process.env.INNGEST_EVENT_KEY = "x";
+  process.env.INNGEST_SIGNING_KEY = "x";
+  process.env.OPENAI_API_KEY = "sk-test";
+  process.env.TARGET_APP_URL = "http://localhost:3001";
+  process.env.SENTRY_WEBHOOK_SECRET = "sentry-secret";
+  process.env.LINEAR_API_KEY = "lin_api_xxx";
+  process.env.LINEAR_WEBHOOK_SECRET = "lin-webhook-secret";
+  process.env.TARGET_REPO_PATH = "/tmp/repo";
+  process.env.TARGET_REPO_WORKTREE_ROOT = "/tmp/worktrees";
+  process.env.TARGET_REPO_REMOTE = "origin";
+  process.env.TARGET_REPO_BASE_BRANCH = "main";
 
-    const env = loadEnv();
-    expect(env.LINEAR_WEBHOOK_SECRET).toBe("lin-sec");
-    expect(env.TARGET_REPO_PATH).toBe("/tmp/target-repo");
-    expect(env.TARGET_REPO_WORKTREE_ROOT).toBe("/tmp/worktrees");
-  });
+  const env = loadEnv();
+  expect(env.LINEAR_WEBHOOK_SECRET).toBe("lin-webhook-secret");
+  expect(env.TARGET_REPO_PATH).toBe("/tmp/repo");
+  expect(env.TARGET_REPO_WORKTREE_ROOT).toBe("/tmp/worktrees");
+  expect(env.TARGET_REPO_REMOTE).toBe("origin");
+  expect(env.TARGET_REPO_BASE_BRANCH).toBe("main");
+});
 ```
 
 - [ ] **Step 2: Run the env test to verify it fails**
@@ -94,58 +86,55 @@ Run:
 pnpm test -- tests/config/env.test.ts
 ```
 
-Expected: FAIL because `LINEAR_WEBHOOK_SECRET`, `TARGET_REPO_PATH`, and `TARGET_REPO_WORKTREE_ROOT` are not in `EnvSchema`.
+Expected: FAIL because the new P2 vars are not yet present in `EnvSchema`.
 
-- [ ] **Step 3: Extend the schema and example env file**
+- [ ] **Step 3: Extend the localhost env schema**
 
-Update `src/config/env.ts`:
+Update `src/config/env.ts` so the schema includes the localhost P1 vars plus the new P2 vars:
 
 ```ts
-import { z } from "zod";
-
 const EnvSchema = z.object({
   INNGEST_EVENT_KEY: z.string().min(1),
   INNGEST_SIGNING_KEY: z.string().min(1),
-  CODEX_BIN: z.string().min(1),
+  OPENAI_API_KEY: z.string().min(1),
+  TARGET_APP_URL: z.string().url(),
+  SENTRY_WEBHOOK_SECRET: z.string().min(1),
+  LINEAR_API_KEY: z.string().min(1),
   LINEAR_WEBHOOK_SECRET: z.string().min(1),
   TARGET_REPO_PATH: z.string().min(1),
   TARGET_REPO_WORKTREE_ROOT: z.string().min(1),
+  TARGET_REPO_REMOTE: z.string().min(1).default("origin"),
+  TARGET_REPO_BASE_BRANCH: z.string().min(1).default("main"),
+  ARTIFACTS_DIR: z.string().min(1).default(".incident-loop-artifacts"),
+  CHROME_PATH: z.string().min(1).optional(),
+  FFMPEG_BIN: z.string().min(1).optional(),
   PORT: z.coerce.number().int().positive().default(3000),
-});
-
-export type Env = z.infer<typeof EnvSchema>;
-
-export function loadEnv(): Env {
-  const parsed = EnvSchema.safeParse(process.env);
-  if (!parsed.success) {
-    const missing = parsed.error.issues
-      .map((i) => `${i.path.join(".")}: ${i.message}`)
-      .join("; ");
-    throw new Error(`Invalid environment: ${missing}`);
-  }
-  return parsed.data;
-}
-
-export const env = new Proxy({} as Env, {
-  get(_t, prop) {
-    return loadEnv()[prop as keyof Env];
-  },
 });
 ```
 
-Update `.env.example`:
+- [ ] **Step 4: Update `.env.example`**
+
+Make sure `.env.example` includes the new P2 block:
 
 ```dotenv
 INNGEST_EVENT_KEY=
 INNGEST_SIGNING_KEY=
-CODEX_BIN=/usr/local/bin/codex
+OPENAI_API_KEY=
+TARGET_APP_URL=http://localhost:3001
+SENTRY_WEBHOOK_SECRET=
+LINEAR_API_KEY=
 LINEAR_WEBHOOK_SECRET=
-TARGET_REPO_PATH=/absolute/path/to/target/repo
+TARGET_REPO_PATH=/absolute/path/to/local/github/checkout
 TARGET_REPO_WORKTREE_ROOT=/tmp/incident-loop-worktrees
+TARGET_REPO_REMOTE=origin
+TARGET_REPO_BASE_BRANCH=main
+ARTIFACTS_DIR=.incident-loop-artifacts
+CHROME_PATH=
+FFMPEG_BIN=
 PORT=3000
 ```
 
-- [ ] **Step 4: Run the env test again**
+- [ ] **Step 5: Run the env test again**
 
 Run:
 
@@ -153,439 +142,174 @@ Run:
 pnpm test -- tests/config/env.test.ts
 ```
 
-Expected: PASS with all four env tests green.
+Expected: PASS with the localhost env tests green.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add src/config/env.ts .env.example tests/config/env.test.ts
-git commit -m "P2 task 1: extend env for Linear webhook and worktrees"
+git commit -m "P2 task 1: extend localhost env for repo-backed fixer flow"
 ```
 
-## Task 2 — Add Reusable HMAC Verification Helper
+## Task 2 — Refresh The Persistent Checkout Before Worktree Creation
 
 **Files:**
-- Create: `src/webhooks/verify.ts`
-- Create: `tests/webhooks/verify.test.ts`
+- Create: `src/git/updateCheckout.ts`
+- Create: `tests/git/updateCheckout.test.ts`
 
 - [ ] **Step 1: Write the failing test**
 
-Create `tests/webhooks/verify.test.ts`:
-
-```ts
-import { createHmac } from "node:crypto";
-import { describe, it, expect } from "vitest";
-import { verifyHmacSha256 } from "../../src/webhooks/verify";
-
-function sign(body: string, secret: string): string {
-  return createHmac("sha256", secret).update(body).digest("hex");
-}
-
-describe("verifyHmacSha256", () => {
-  const body = JSON.stringify({ ok: true });
-  const secret = "shh";
-
-  it("returns true for a valid signature", () => {
-    expect(
-      verifyHmacSha256({
-        body,
-        secret,
-        signature: sign(body, secret),
-      }),
-    ).toBe(true);
-  });
-
-  it("returns false for an invalid signature", () => {
-    expect(
-      verifyHmacSha256({
-        body,
-        secret,
-        signature: "deadbeef",
-      }),
-    ).toBe(false);
-  });
-});
-```
-
-- [ ] **Step 2: Run the helper test to verify it fails**
-
-Run:
-
-```bash
-pnpm test -- tests/webhooks/verify.test.ts
-```
-
-Expected: FAIL because `src/webhooks/verify.ts` does not exist.
-
-- [ ] **Step 3: Implement the helper**
-
-Create `src/webhooks/verify.ts`:
-
-```ts
-import { createHmac, timingSafeEqual } from "node:crypto";
-
-export interface VerifyHmacInput {
-  body: string;
-  signature: string;
-  secret: string;
-}
-
-export function verifyHmacSha256({
-  body,
-  signature,
-  secret,
-}: VerifyHmacInput): boolean {
-  const expected = createHmac("sha256", secret).update(body).digest("hex");
-  const actualBuffer = Buffer.from(signature);
-  const expectedBuffer = Buffer.from(expected);
-
-  return (
-    actualBuffer.length === expectedBuffer.length &&
-    timingSafeEqual(actualBuffer, expectedBuffer)
-  );
-}
-```
-
-- [ ] **Step 4: Run the helper test again**
-
-Run:
-
-```bash
-pnpm test -- tests/webhooks/verify.test.ts
-```
-
-Expected: PASS with both verification tests green.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/webhooks/verify.ts tests/webhooks/verify.test.ts
-git commit -m "P2 task 2: add reusable webhook signature verification"
-```
-
-## Task 3 — Parse Tagged JSON From Codex Output
-
-**Files:**
-- Create: `src/codex/taggedJson.ts`
-- Create: `tests/codex/taggedJson.test.ts`
-
-- [ ] **Step 1: Write the failing test**
-
-Create `tests/codex/taggedJson.test.ts`:
-
-```ts
-import { describe, it, expect } from "vitest";
-import { extractTaggedJson } from "../../src/codex/taggedJson";
-
-describe("extractTaggedJson", () => {
-  it("parses a tagged JSON line", () => {
-    const stdout = [
-      "noise before",
-      'FIXER_RESULT {"status":"ok","prUrl":"https://github.com/acme/repo/pull/1"}',
-    ].join("\n");
-
-    expect(extractTaggedJson<{ status: string; prUrl: string }>(stdout, "FIXER_RESULT"))
-      .toEqual({
-        status: "ok",
-        prUrl: "https://github.com/acme/repo/pull/1",
-      });
-  });
-
-  it("uses the last matching line", () => {
-    const stdout = [
-      'FIXER_RESULT {"status":"old"}',
-      'FIXER_RESULT {"status":"new"}',
-    ].join("\n");
-
-    expect(extractTaggedJson<{ status: string }>(stdout, "FIXER_RESULT")).toEqual({
-      status: "new",
-    });
-  });
-
-  it("throws when the tagged line is missing", () => {
-    expect(() => extractTaggedJson("plain output", "FIXER_RESULT"))
-      .toThrow(/Missing FIXER_RESULT line/);
-  });
-
-  it("throws when the tagged JSON is invalid", () => {
-    expect(() => extractTaggedJson("FIXER_RESULT not-json", "FIXER_RESULT"))
-      .toThrow(/Invalid FIXER_RESULT JSON/);
-  });
-});
-```
-
-- [ ] **Step 2: Run the parser test to verify it fails**
-
-Run:
-
-```bash
-pnpm test -- tests/codex/taggedJson.test.ts
-```
-
-Expected: FAIL because `src/codex/taggedJson.ts` does not exist.
-
-- [ ] **Step 3: Implement the parser**
-
-Create `src/codex/taggedJson.ts`:
-
-```ts
-export function extractTaggedJson<T>(stdout: string, tag: string): T {
-  const prefix = `${tag} `;
-  const line = stdout
-    .split(/\r?\n/)
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .reverse()
-    .find((entry) => entry.startsWith(prefix));
-
-  if (!line) {
-    throw new Error(`Missing ${tag} line in Codex output`);
-  }
-
-  try {
-    return JSON.parse(line.slice(prefix.length)) as T;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Invalid ${tag} JSON: ${message}`);
-  }
-}
-```
-
-- [ ] **Step 4: Run the parser test again**
-
-Run:
-
-```bash
-pnpm test -- tests/codex/taggedJson.test.ts
-```
-
-Expected: PASS with all parser tests green.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/codex/taggedJson.ts tests/codex/taggedJson.test.ts
-git commit -m "P2 task 3: parse tagged JSON from Codex output"
-```
-
-## Task 4 — Fetch Live Linear Ticket Context Through Codex
-
-**Files:**
-- Create: `src/prompts/linearTicketContext.ts`
-- Create: `src/linear/fetchTicketContext.ts`
-- Create: `tests/prompts/linearTicketContext.test.ts`
-- Create: `tests/linear/fetchTicketContext.test.ts`
-
-- [ ] **Step 1: Write the failing prompt-builder test**
-
-Create `tests/prompts/linearTicketContext.test.ts`:
-
-```ts
-import { describe, it, expect } from "vitest";
-import { buildLinearTicketContextPrompt } from "../../src/prompts/linearTicketContext";
-
-describe("buildLinearTicketContextPrompt", () => {
-  const input = {
-    ticketId: "lin_123",
-    identifier: "BUG-42",
-    module: "checkout",
-    url: "https://linear.app/acme/issue/BUG-42",
-  };
-
-  it("mentions the ticket id and identifier", () => {
-    const prompt = buildLinearTicketContextPrompt(input);
-    expect(prompt).toContain("lin_123");
-    expect(prompt).toContain("BUG-42");
-  });
-
-  it("requires Linear MCP and exact tagged output", () => {
-    const prompt = buildLinearTicketContextPrompt(input);
-    expect(prompt).toMatch(/Linear MCP/i);
-    expect(prompt).toContain("LINEAR_TICKET_CONTEXT");
-  });
-
-  it("asks for browser visibility, environment hints, and similar issue context", () => {
-    const prompt = buildLinearTicketContextPrompt(input);
-    expect(prompt).toMatch(/browser-visible/i);
-    expect(prompt).toMatch(/viewport/i);
-    expect(prompt).toMatch(/browser/i);
-    expect(prompt).toMatch(/similar issue/i);
-  });
-});
-```
-
-- [ ] **Step 2: Write the failing fetcher test**
-
-Create `tests/linear/fetchTicketContext.test.ts`:
+Create `tests/git/updateCheckout.test.ts`:
 
 ```ts
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { EventEmitter } from "node:events";
 
-vi.mock("../../src/codex/invoke", () => ({
-  invokeCodex: vi.fn(),
+const spawnMock = vi.fn();
+vi.mock("node:child_process", () => ({
+  spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 
-import { invokeCodex } from "../../src/codex/invoke";
-import { fetchLinearTicketContext } from "../../src/linear/fetchTicketContext";
+import { updateCheckout } from "../../src/git/updateCheckout";
 
-describe("fetchLinearTicketContext", () => {
+function fakeProc(exitCode: number, stderr = ""): unknown {
+  const proc = new EventEmitter() as EventEmitter & { stderr: EventEmitter };
+  proc.stderr = new EventEmitter();
+  setImmediate(() => {
+    if (stderr) proc.stderr.emit("data", Buffer.from(stderr));
+    proc.emit("close", exitCode);
+  });
+  return proc;
+}
+
+describe("updateCheckout", () => {
   beforeEach(() => {
-    vi.mocked(invokeCodex).mockReset();
+    spawnMock.mockReset();
+    process.env.INNGEST_EVENT_KEY = "x";
+    process.env.INNGEST_SIGNING_KEY = "x";
+    process.env.OPENAI_API_KEY = "sk-test";
+    process.env.TARGET_APP_URL = "http://localhost:3001";
+    process.env.SENTRY_WEBHOOK_SECRET = "sentry-secret";
+    process.env.LINEAR_API_KEY = "lin_api_xxx";
+    process.env.LINEAR_WEBHOOK_SECRET = "lin-webhook-secret";
+    process.env.TARGET_REPO_PATH = "/tmp/repo";
+    process.env.TARGET_REPO_WORKTREE_ROOT = "/tmp/worktrees";
+    process.env.TARGET_REPO_REMOTE = "origin";
+    process.env.TARGET_REPO_BASE_BRANCH = "main";
   });
 
-  it("returns parsed ticket context", async () => {
-    vi.mocked(invokeCodex).mockResolvedValue({
-      stdout: [
-        "some logs",
-        'LINEAR_TICKET_CONTEXT {"ticketId":"lin_123","identifier":"BUG-42","url":"https://linear.app/acme/issue/BUG-42","title":"Checkout crash","body":"Reproduction steps: 1. Open checkout","module":"checkout","browserVisible":true,"similarIssueContext":"BUG-12 had the same cart flow","environmentHints":{"browser":"webkit","os":"macos","viewport":"390x844"}}',
-      ].join("\n"),
-      stderr: "",
-      exitCode: 0,
-    });
+  it("fetches the remote and fast-forwards the base branch", async () => {
+    spawnMock
+      .mockReturnValueOnce(fakeProc(0))
+      .mockReturnValueOnce(fakeProc(0))
+      .mockReturnValueOnce(fakeProc(0));
 
-    const result = await fetchLinearTicketContext({
-      ticketId: "lin_123",
-      identifier: "BUG-42",
-      module: "checkout",
-      url: "https://linear.app/acme/issue/BUG-42",
-    });
+    await updateCheckout();
 
-    expect(result.title).toBe("Checkout crash");
-    expect(result.browserVisible).toBe(true);
-    expect(result.environmentHints.browser).toBe("webkit");
-    expect(invokeCodex).toHaveBeenCalledWith(
-      expect.stringContaining("LINEAR_TICKET_CONTEXT"),
-      expect.objectContaining({ timeoutMs: 300000 }),
+    expect(spawnMock).toHaveBeenNthCalledWith(
+      1,
+      "git",
+      ["rev-parse", "--is-inside-work-tree"],
+      expect.objectContaining({ cwd: "/tmp/repo" }),
+    );
+    expect(spawnMock).toHaveBeenNthCalledWith(
+      2,
+      "git",
+      ["fetch", "origin"],
+      expect.objectContaining({ cwd: "/tmp/repo" }),
+    );
+    expect(spawnMock).toHaveBeenNthCalledWith(
+      3,
+      "git",
+      ["pull", "--ff-only", "origin", "main"],
+      expect.objectContaining({ cwd: "/tmp/repo" }),
     );
   });
 
-  it("falls back to the event module when the fetched module is empty", async () => {
-    vi.mocked(invokeCodex).mockResolvedValue({
-      stdout: 'LINEAR_TICKET_CONTEXT {"ticketId":"lin_123","identifier":"BUG-42","url":"https://linear.app/acme/issue/BUG-42","title":"Checkout crash","body":"Reproduction steps: 1. Open checkout","module":"","browserVisible":false,"similarIssueContext":"","environmentHints":{"browser":"","os":"","viewport":""}}',
-      stderr: "",
-      exitCode: 0,
-    });
+  it("fails when the target path is not a git checkout", async () => {
+    spawnMock.mockReturnValue(fakeProc(1, "fatal: not a git repository"));
+    await expect(updateCheckout()).rejects.toThrow(
+      /git rev-parse --is-inside-work-tree.*not a git repository/,
+    );
+  });
 
-    const result = await fetchLinearTicketContext({
-      ticketId: "lin_123",
-      identifier: "BUG-42",
-      module: "unknown",
-      url: "https://linear.app/acme/issue/BUG-42",
-    });
-
-    expect(result.module).toBe("unknown");
+  it("fails when fetch fails", async () => {
+    spawnMock
+      .mockReturnValueOnce(fakeProc(0))
+      .mockReturnValueOnce(fakeProc(1, "fatal: no remote"));
+    await expect(updateCheckout()).rejects.toThrow(/git fetch origin.*no remote/);
   });
 });
 ```
 
-- [ ] **Step 3: Run the new tests to verify they fail**
+- [ ] **Step 2: Run the checkout test to verify it fails**
 
 Run:
 
 ```bash
-pnpm test -- tests/prompts/linearTicketContext.test.ts tests/linear/fetchTicketContext.test.ts
+pnpm test -- tests/git/updateCheckout.test.ts
 ```
 
-Expected: FAIL because the new prompt and fetcher modules do not exist.
+Expected: FAIL because `src/git/updateCheckout.ts` does not exist.
 
-- [ ] **Step 4: Implement the Linear ticket context prompt**
+- [ ] **Step 3: Implement the helper**
 
-Create `src/prompts/linearTicketContext.ts`:
-
-```ts
-export interface LinearTicketSeed {
-  ticketId: string;
-  identifier: string;
-  module: string;
-  url: string;
-}
-
-export function buildLinearTicketContextPrompt(input: LinearTicketSeed): string {
-  return `You are gathering live Linear ticket context for the incident-loop fixer.
-
-Use the Linear MCP to inspect ticket ${input.ticketId} (${input.identifier}) at ${input.url}.
-Do not modify the ticket. Read the description, comments, labels, and any similar-issue references linked from the ticket.
-
-Return exactly one line and nothing after it:
-LINEAR_TICKET_CONTEXT {"ticketId":"${input.ticketId}","identifier":"${input.identifier}","url":"${input.url}","title":"...","body":"...","module":"...","browserVisible":true,"similarIssueContext":"...","environmentHints":{"browser":"...","os":"...","viewport":"..."}}
-
-Rules:
-- "body" should preserve the most useful reproduction details you found.
-- "module" should use the best `module:*` label you can confirm. If you cannot improve on the incoming hint, return "${input.module}".
-- "browserVisible" should be true only when the bug is meaningfully visible in a browser flow.
-- "similarIssueContext" should summarize only relevant prior issue context. Return "" when none exists.
-- "environmentHints" should carry the best browser / OS / viewport clues you can confirm from the ticket. Use empty strings when unavailable.
-- No markdown fences.
-- No explanation before or after the tagged line.
-`;
-}
-```
-
-- [ ] **Step 5: Implement the typed fetcher**
-
-Create `src/linear/fetchTicketContext.ts`:
+Create `src/git/updateCheckout.ts`:
 
 ```ts
-import { invokeCodex } from "../codex/invoke";
-import { extractTaggedJson } from "../codex/taggedJson";
-import {
-  buildLinearTicketContextPrompt,
-  type LinearTicketSeed,
-} from "../prompts/linearTicketContext";
+import { spawn } from "node:child_process";
+import { env } from "../config/env";
 
-export interface LinearTicketContext extends LinearTicketSeed {
-  title: string;
-  body: string;
-  browserVisible: boolean;
-  similarIssueContext: string;
-  environmentHints: {
-    browser: string;
-    os: string;
-    viewport: string;
-  };
-}
+function runGit(args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn("git", args, {
+      cwd: env.TARGET_REPO_PATH,
+      stdio: ["ignore", "ignore", "pipe"],
+    });
 
-type ParsedLinearTicketContext = Omit<LinearTicketContext, "module"> & {
-  module?: string;
-};
+    let stderr = "";
+    proc.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
 
-export async function fetchLinearTicketContext(
-  input: LinearTicketSeed,
-): Promise<LinearTicketContext> {
-  const { stdout } = await invokeCodex(buildLinearTicketContextPrompt(input), {
-    timeoutMs: 5 * 60 * 1000,
+    proc.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`git ${args.join(" ")} failed: ${stderr.trim()}`));
+    });
+    proc.on("error", reject);
   });
+}
 
-  const parsed = extractTaggedJson<ParsedLinearTicketContext>(
-    stdout,
-    "LINEAR_TICKET_CONTEXT",
-  );
-
-  return {
-    ...parsed,
-    module: parsed.module || input.module,
-  };
+export async function updateCheckout(): Promise<void> {
+  await runGit(["rev-parse", "--is-inside-work-tree"]);
+  await runGit(["fetch", env.TARGET_REPO_REMOTE]);
+  await runGit([
+    "pull",
+    "--ff-only",
+    env.TARGET_REPO_REMOTE,
+    env.TARGET_REPO_BASE_BRANCH,
+  ]);
 }
 ```
 
-- [ ] **Step 6: Run the prompt and fetcher tests again**
+- [ ] **Step 4: Run the checkout test again**
 
 Run:
 
 ```bash
-pnpm test -- tests/prompts/linearTicketContext.test.ts tests/linear/fetchTicketContext.test.ts
+pnpm test -- tests/git/updateCheckout.test.ts
 ```
 
-Expected: PASS with all five tests green.
+Expected: PASS with both checkout-refresh tests green.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add src/prompts/linearTicketContext.ts src/linear/fetchTicketContext.ts tests/prompts/linearTicketContext.test.ts tests/linear/fetchTicketContext.test.ts
-git commit -m "P2 task 4: fetch live ticket context through Codex and Linear MCP"
+git add src/git/updateCheckout.ts tests/git/updateCheckout.test.ts
+git commit -m "P2 task 2: refresh persistent checkout before fixer runs"
 ```
 
-## Task 5 — Create Git Worktree Helper
+## Task 3 — Create And Clean Up Worktrees From The Refreshed Base
 
 **Files:**
 - Create: `src/git/worktree.ts`
@@ -607,20 +331,12 @@ vi.mock("node:child_process", () => ({
 import { createWorktree, removeWorktree } from "../../src/git/worktree";
 
 function fakeProc(exitCode: number, stderr = ""): unknown {
-  const proc = new EventEmitter() as EventEmitter & {
-    stdout: EventEmitter;
-    stderr: EventEmitter;
-  };
-  proc.stdout = new EventEmitter();
+  const proc = new EventEmitter() as EventEmitter & { stderr: EventEmitter };
   proc.stderr = new EventEmitter();
-
   setImmediate(() => {
-    if (stderr) {
-      proc.stderr.emit("data", Buffer.from(stderr));
-    }
+    if (stderr) proc.stderr.emit("data", Buffer.from(stderr));
     proc.emit("close", exitCode);
   });
-
   return proc;
 }
 
@@ -629,37 +345,51 @@ describe("worktree helper", () => {
     spawnMock.mockReset();
     process.env.INNGEST_EVENT_KEY = "x";
     process.env.INNGEST_SIGNING_KEY = "x";
-    process.env.CODEX_BIN = "/usr/local/bin/codex";
-    process.env.LINEAR_WEBHOOK_SECRET = "x";
-    process.env.TARGET_REPO_PATH = "/tmp/target";
-    process.env.TARGET_REPO_WORKTREE_ROOT = "/tmp/wt";
+    process.env.OPENAI_API_KEY = "sk-test";
+    process.env.TARGET_APP_URL = "http://localhost:3001";
+    process.env.SENTRY_WEBHOOK_SECRET = "sentry-secret";
+    process.env.LINEAR_API_KEY = "lin_api_xxx";
+    process.env.LINEAR_WEBHOOK_SECRET = "lin-webhook-secret";
+    process.env.TARGET_REPO_PATH = "/tmp/repo";
+    process.env.TARGET_REPO_WORKTREE_ROOT = "/tmp/worktrees";
+    process.env.TARGET_REPO_REMOTE = "origin";
+    process.env.TARGET_REPO_BASE_BRANCH = "main";
   });
 
-  it("creates a worktree with a branch named after the ticket", async () => {
+  it("creates a worktree from the refreshed base branch", async () => {
     spawnMock.mockReturnValue(fakeProc(0));
-    const wt = await createWorktree("BUG-42");
+    const worktree = await createWorktree("BUG-42");
 
-    expect(wt.path).toMatch(/\/tmp\/wt\/BUG-42-/);
-    expect(wt.branch).toMatch(/^fix\/BUG-42-/);
+    expect(worktree.path).toMatch(/\/tmp\/worktrees\/BUG-42-/);
+    expect(worktree.branch).toMatch(/^fix\/BUG-42-/);
     expect(spawnMock).toHaveBeenCalledWith(
       "git",
-      expect.arrayContaining(["worktree", "add", "-b", wt.branch, wt.path]),
-      expect.objectContaining({ cwd: "/tmp/target" }),
+      expect.arrayContaining([
+        "worktree",
+        "add",
+        "-b",
+        worktree.branch,
+        worktree.path,
+        "main",
+      ]),
+      expect.objectContaining({ cwd: "/tmp/repo" }),
     );
   });
 
-  it("rejects on git failure", async () => {
-    spawnMock.mockReturnValue(fakeProc(1, "fatal: boom"));
-    await expect(createWorktree("BUG-42")).rejects.toThrow(/git worktree add.*boom/);
-  });
-
-  it("removes a worktree", async () => {
+  it("removes the worktree", async () => {
     spawnMock.mockReturnValue(fakeProc(0));
-    await removeWorktree("/tmp/wt/BUG-42-abcd");
+    await removeWorktree("/tmp/worktrees/BUG-42-abcd");
     expect(spawnMock).toHaveBeenCalledWith(
       "git",
-      ["worktree", "remove", "--force", "/tmp/wt/BUG-42-abcd"],
-      expect.objectContaining({ cwd: "/tmp/target" }),
+      ["worktree", "remove", "--force", "/tmp/worktrees/BUG-42-abcd"],
+      expect.objectContaining({ cwd: "/tmp/repo" }),
+    );
+  });
+
+  it("fails when git worktree add fails", async () => {
+    spawnMock.mockReturnValue(fakeProc(1, "fatal: invalid reference"));
+    await expect(createWorktree("BUG-42")).rejects.toThrow(
+      /git worktree add.*invalid reference/,
     );
   });
 });
@@ -694,22 +424,16 @@ function runGit(args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
     const proc = spawn("git", args, {
       cwd: env.TARGET_REPO_PATH,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", "ignore", "pipe"],
     });
-
     let stderr = "";
     proc.stderr?.on("data", (chunk: Buffer) => {
       stderr += chunk.toString();
     });
-
     proc.on("close", (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`git ${args.join(" ")} failed: ${stderr.trim()}`));
-      }
+      if (code === 0) resolve();
+      else reject(new Error(`git ${args.join(" ")} failed: ${stderr.trim()}`));
     });
-
     proc.on("error", reject);
   });
 }
@@ -719,7 +443,15 @@ export async function createWorktree(ticketId: string): Promise<Worktree> {
   const path = join(env.TARGET_REPO_WORKTREE_ROOT, `${ticketId}-${suffix}`);
   const branch = `fix/${ticketId}-${suffix}`;
 
-  await runGit(["worktree", "add", "-b", branch, path]);
+  await runGit([
+    "worktree",
+    "add",
+    "-b",
+    branch,
+    path,
+    env.TARGET_REPO_BASE_BRANCH,
+  ]);
+
   return { path, branch };
 }
 
@@ -736,22 +468,212 @@ Run:
 pnpm test -- tests/git/worktree.test.ts
 ```
 
-Expected: PASS with all worktree tests green.
+Expected: PASS with worktree create/remove covered.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/git/worktree.ts tests/git/worktree.test.ts
-git commit -m "P2 task 5: add git worktree helper"
+git commit -m "P2 task 3: create worktrees from refreshed localhost base"
 ```
 
-## Task 6 — Build The Fixer Prompt And Structured Completion Contract
+## Task 4 — Add The Shared Codex Runner And Result Parsing
 
 **Files:**
+- Create: `src/codex/fixer.ts`
+- Create: `tests/codex/fixer.test.ts`
+
+- [ ] **Step 1: Write the failing runner test**
+
+Create `tests/codex/fixer.test.ts`:
+
+```ts
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+vi.mock("@openai/codex-sdk", () => ({
+  runCodex: vi.fn(),
+}));
+
+import { runCodexTask, runFixer, parseFixerResult } from "../../src/codex/fixer";
+import { runCodex } from "@openai/codex-sdk";
+
+describe("parseFixerResult", () => {
+  it("parses the tagged result line", () => {
+    expect(
+      parseFixerResult(
+        'FIXER_RESULT {"status":"ok","prUrl":"https://github.com/acme/repo/pull/1","testPath":"tests/regressions/bug-42.spec.ts","redEvidence":"Expected 500","greenEvidence":"1 passed","regressionGuardEvidence":"other flows still pass"}',
+      ).prUrl,
+    ).toBe("https://github.com/acme/repo/pull/1");
+  });
+
+  it("fails when required proof is missing", () => {
+    expect(() =>
+      parseFixerResult(
+        'FIXER_RESULT {"status":"ok","prUrl":"https://github.com/acme/repo/pull/1","testPath":"tests/regressions/bug-42.spec.ts","redEvidence":"Expected 500","greenEvidence":"1 passed","regressionGuardEvidence":""}',
+      ),
+    ).toThrow(/Incomplete FIXER_RESULT payload/);
+  });
+});
+
+describe("runCodexTask", () => {
+  beforeEach(() => {
+    vi.mocked(runCodex).mockReset();
+  });
+
+  it("returns raw Codex output for shared tasks", async () => {
+    vi.mocked(runCodex).mockResolvedValue({
+      outputText: 'LINEAR_TICKET_CONTEXT {"ticketId":"lin_123"}',
+    });
+
+    await expect(runCodexTask("inspect Linear ticket")).resolves.toContain(
+      "LINEAR_TICKET_CONTEXT",
+    );
+  });
+});
+
+describe("runFixer", () => {
+  beforeEach(() => {
+    vi.mocked(runCodex).mockReset();
+  });
+
+  it("returns parsed fixer output", async () => {
+    vi.mocked(runCodex).mockResolvedValue({
+      outputText: 'FIXER_RESULT {"status":"ok","prUrl":"https://github.com/acme/repo/pull/1","testPath":"tests/regressions/bug-42.spec.ts","redEvidence":"Expected 500","greenEvidence":"1 passed","regressionGuardEvidence":"other flows still pass","browserVerificationEvidence":"checkout succeeds on localhost"}',
+    });
+
+    const result = await runFixer({
+      prompt: "fix it",
+      cwd: "/tmp/worktrees/BUG-42-abcd",
+    });
+
+    expect(result.browserVerificationEvidence).toContain("localhost");
+  });
+});
+```
+
+- [ ] **Step 2: Run the runner test to verify it fails**
+
+Run:
+
+```bash
+pnpm test -- tests/codex/fixer.test.ts
+```
+
+Expected: FAIL because `src/codex/fixer.ts` does not exist.
+
+- [ ] **Step 3: Implement the shared runner**
+
+Create `src/codex/fixer.ts`:
+
+```ts
+import { runCodex } from "@openai/codex-sdk";
+
+export interface FixerResult {
+  status: "ok";
+  prUrl: string;
+  testPath: string;
+  redEvidence: string;
+  greenEvidence: string;
+  regressionGuardEvidence: string;
+  browserVerificationEvidence?: string;
+}
+
+export async function runCodexTask(prompt: string, cwd?: string): Promise<string> {
+  const result = await runCodex(cwd ? { prompt, cwd } : { prompt });
+  return result.outputText;
+}
+
+export function parseFixerResult(stdout: string): FixerResult {
+  const line = stdout
+    .split(/\r?\n/)
+    .find((entry) => entry.startsWith("FIXER_RESULT "));
+
+  if (!line) throw new Error("Missing FIXER_RESULT line");
+
+  const parsed = JSON.parse(line.slice("FIXER_RESULT ".length)) as FixerResult;
+  if (
+    parsed.status !== "ok" ||
+    !parsed.prUrl ||
+    !parsed.redEvidence ||
+    !parsed.greenEvidence ||
+    !parsed.regressionGuardEvidence
+  ) {
+    throw new Error("Incomplete FIXER_RESULT payload");
+  }
+  return parsed;
+}
+
+export async function runFixer(input: {
+  prompt: string;
+  cwd: string;
+}): Promise<FixerResult> {
+  return parseFixerResult(await runCodexTask(input.prompt, input.cwd));
+}
+```
+
+- [ ] **Step 4: Run the runner test again**
+
+Run:
+
+```bash
+pnpm test -- tests/codex/fixer.test.ts
+```
+
+Expected: PASS with shared Codex invocation and result parsing covered.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/codex/fixer.ts tests/codex/fixer.test.ts
+git commit -m "P2 task 4: add shared Codex runner for localhost fixer flows"
+```
+
+## Task 5 — Build The Localhost Fixer Prompt And Fetch Live Linear Ticket Context
+
+**Files:**
+- Create: `src/linear/fetchTicketContext.ts`
 - Create: `src/prompts/fixer.ts`
+- Create: `tests/linear/fetchTicketContext.test.ts`
 - Create: `tests/prompts/fixer.test.ts`
 
-- [ ] **Step 1: Write the failing prompt contract test**
+- [ ] **Step 1: Write the failing ticket-context test**
+
+Create `tests/linear/fetchTicketContext.test.ts`:
+
+```ts
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+vi.mock("../../src/codex/fixer", () => ({
+  runCodexTask: vi.fn(),
+}));
+
+import { runCodexTask } from "../../src/codex/fixer";
+import { fetchTicketContext } from "../../src/linear/fetchTicketContext";
+
+describe("fetchTicketContext", () => {
+  beforeEach(() => {
+    vi.mocked(runCodexTask).mockReset();
+  });
+
+  it("parses live ticket context and environment hints", async () => {
+    vi.mocked(runCodexTask).mockResolvedValue(
+      'LINEAR_TICKET_CONTEXT {"ticketId":"lin_123","identifier":"BUG-42","url":"https://linear.app/acme/issue/BUG-42","title":"Checkout crash","body":"Reproduction steps: 1. Open checkout","module":"checkout","browserVisible":true,"similarIssueContext":"BUG-12 same flow","environmentHints":{"browser":"webkit","os":"macos","viewport":"390x844"}}',
+    );
+
+    const result = await fetchTicketContext({
+      ticketId: "lin_123",
+      identifier: "BUG-42",
+      module: "checkout",
+      url: "https://linear.app/acme/issue/BUG-42",
+    });
+
+    expect(result.browserVisible).toBe(true);
+    expect(result.environmentHints.browser).toBe("webkit");
+  });
+});
+```
+
+- [ ] **Step 2: Write the failing prompt test**
 
 Create `tests/prompts/fixer.test.ts`:
 
@@ -768,194 +690,166 @@ describe("buildFixerPrompt", () => {
     body: "Reproduction steps: 1. Open checkout",
     module: "checkout",
     browserVisible: true,
-    similarIssueContext: "BUG-12 had the same cart flow",
+    similarIssueContext: "BUG-12 same flow",
     environmentHints: {
       browser: "webkit",
       os: "macos",
       viewport: "390x844",
     },
   };
-  const worktreePath = "/tmp/wt/BUG-42-abcd";
-  const branch = "fix/BUG-42-abcd";
 
-  it("includes ticket context and worktree metadata", () => {
-    const prompt = buildFixerPrompt({ ticket, worktreePath, branch });
-    expect(prompt).toContain(ticket.identifier);
-    expect(prompt).toContain(ticket.url);
-    expect(prompt).toContain(ticket.body);
-    expect(prompt).toContain(worktreePath);
-    expect(prompt).toContain(branch);
-  });
+  it("requires red-green, regression guard, and GitHub MCP draft PR creation", () => {
+    const prompt = buildFixerPrompt({
+      ticket,
+      worktreePath: "/tmp/worktrees/BUG-42-abcd",
+      branch: "fix/BUG-42-abcd",
+      targetAppUrl: "http://localhost:3001",
+    });
 
-  it("requires red-green discipline and systematic debugging fallback", () => {
-    const prompt = buildFixerPrompt({ ticket, worktreePath, branch });
     expect(prompt).toMatch(/red/i);
     expect(prompt).toMatch(/green/i);
-    expect(prompt).toMatch(/systematic-debugging/i);
-  });
-
-  it("requires a regression guard so the fix does not break working behavior", () => {
-    const prompt = buildFixerPrompt({ ticket, worktreePath, branch });
     expect(prompt).toMatch(/regression guard/i);
-    expect(prompt).toMatch(/already-correct behavior/i);
+    expect(prompt).toMatch(/GitHub MCP/i);
   });
 
-  it("treats tests/regressions as the knowledge base", () => {
-    const prompt = buildFixerPrompt({ ticket, worktreePath, branch });
-    expect(prompt).toContain("tests/regressions/");
-    expect(prompt).toMatch(/knowledge base/i);
-  });
+  it("includes localhost verification hints", () => {
+    const prompt = buildFixerPrompt({
+      ticket,
+      worktreePath: "/tmp/worktrees/BUG-42-abcd",
+      branch: "fix/BUG-42-abcd",
+      targetAppUrl: "http://localhost:3001",
+    });
 
-  it("requires a FIXER_RESULT payload", () => {
-    const prompt = buildFixerPrompt({ ticket, worktreePath, branch });
-    expect(prompt).toContain("FIXER_RESULT");
-    expect(prompt).toContain('"redEvidence"');
-    expect(prompt).toContain('"greenEvidence"');
-    expect(prompt).toContain('"regressionGuardEvidence"');
-  });
-
-  it("mentions Chrome MCP when the bug is browser-visible", () => {
-    const prompt = buildFixerPrompt({ ticket, worktreePath, branch });
-    expect(prompt).toMatch(/Chrome MCP/i);
-    expect(prompt).toMatch(/accessibility tree diff/i);
+    expect(prompt).toContain("http://localhost:3001");
     expect(prompt).toMatch(/webkit/i);
     expect(prompt).toMatch(/390x844/i);
-  });
-
-  it("omits Chrome MCP instructions for non-browser-visible bugs", () => {
-    const prompt = buildFixerPrompt({
-      ticket: { ...ticket, browserVisible: false },
-      worktreePath,
-      branch,
-    });
-    expect(prompt).not.toMatch(/Use Chrome MCP/i);
+    expect(prompt).toMatch(/accessibility tree diff/i);
   });
 });
 ```
 
-- [ ] **Step 2: Run the prompt contract test to verify it fails**
+- [ ] **Step 3: Run the prompt and ticket-context tests to verify they fail**
 
 Run:
 
 ```bash
-pnpm test -- tests/prompts/fixer.test.ts
+pnpm test -- tests/linear/fetchTicketContext.test.ts tests/prompts/fixer.test.ts
 ```
 
-Expected: FAIL because `src/prompts/fixer.ts` does not exist.
+Expected: FAIL because the ticket-context and prompt modules do not exist.
 
-- [ ] **Step 3: Implement the fixer prompt**
+- [ ] **Step 4: Implement the typed ticket-context fetcher**
+
+Create `src/linear/fetchTicketContext.ts`:
+
+```ts
+import { runCodexTask } from "../codex/fixer";
+
+export interface TicketSeed {
+  ticketId: string;
+  identifier: string;
+  module: string;
+  url: string;
+}
+
+export interface TicketContext extends TicketSeed {
+  title: string;
+  body: string;
+  browserVisible: boolean;
+  similarIssueContext: string;
+  environmentHints: {
+    browser: string;
+    os: string;
+    viewport: string;
+  };
+}
+
+export async function fetchTicketContext(input: TicketSeed): Promise<TicketContext> {
+  const output = await runCodexTask(`
+Use Linear MCP to inspect ticket ${input.ticketId} (${input.identifier}) and return exactly:
+LINEAR_TICKET_CONTEXT {"ticketId":"${input.ticketId}","identifier":"${input.identifier}","url":"${input.url}","title":"...","body":"...","module":"...","browserVisible":true,"similarIssueContext":"...","environmentHints":{"browser":"...","os":"...","viewport":"..."}}
+`);
+
+  const line = output
+    .split(/\\r?\\n/)
+    .find((entry) => entry.startsWith("LINEAR_TICKET_CONTEXT "));
+
+  if (!line) {
+    throw new Error("Missing LINEAR_TICKET_CONTEXT line");
+  }
+
+  const parsed = JSON.parse(line.slice("LINEAR_TICKET_CONTEXT ".length)) as TicketContext;
+  return {
+    ...parsed,
+    module: parsed.module || input.module,
+  };
+}
+```
+
+- [ ] **Step 5: Implement the prompt**
 
 Create `src/prompts/fixer.ts`:
 
 ```ts
-import type { LinearTicketContext } from "../linear/fetchTicketContext";
+import type { TicketContext } from "../linear/fetchTicketContext";
 
-export interface FixerInput {
-  ticket: LinearTicketContext;
+export function buildFixerPrompt(input: {
+  ticket: TicketContext;
   worktreePath: string;
   branch: string;
-}
+  targetAppUrl: string;
+}): string {
+  const { ticket, worktreePath, branch, targetAppUrl } = input;
 
-export interface FixerCompletion {
-  status: "ok";
-  prUrl: string;
-  testPath: string;
-  redEvidence: string;
-  greenEvidence: string;
-  regressionGuardEvidence: string;
-  chromeEvidence?: string;
-}
+  return `You are the localhost Incident Fixer.
 
-export function buildFixerPrompt({
-  ticket,
-  worktreePath,
-  branch,
-}: FixerInput): string {
-  const testPath = `tests/regressions/${ticket.identifier.toLowerCase()}.spec.ts`;
-  const similarIssueContext = ticket.similarIssueContext || "none";
-  const environmentHints = [
-    `- Browser hint: ${ticket.environmentHints.browser || "unknown"}`,
-    `- OS hint: ${ticket.environmentHints.os || "unknown"}`,
-    `- Viewport hint: ${ticket.environmentHints.viewport || "unknown"}`,
-  ].join("\n");
-  const chromeSection = ticket.browserVisible
-    ? "8. Use Chrome MCP to verify the browser-visible fix and capture concise evidence. Match the browser and viewport hints above as closely as possible. If the issue points to Safari, use Playwright WebKit. For layout shifts, missing elements, or broken CSS, include accessibility tree diff evidence."
-    : "8. Chrome MCP is optional for this ticket because the current context does not clearly indicate a browser-visible bug.";
+The regression test is the durable knowledge base. Work only inside ${worktreePath}.
 
-  return `You are the Incident Fixer for the incident-loop system.
+Ticket: ${ticket.identifier}
+URL: ${ticket.url}
+Module: ${ticket.module}
+Branch: ${branch}
+Similar issue context: ${ticket.similarIssueContext || "none"}
+Target app URL: ${targetAppUrl}
+Environment hints: browser=${ticket.environmentHints.browser || "unknown"}, os=${ticket.environmentHints.os || "unknown"}, viewport=${ticket.environmentHints.viewport || "unknown"}
 
-The regression test is the durable knowledge base for future bug prevention. Your job is to convert this incident into a focused regression test, prove the test fails, apply the minimal fix, prove the test passes, and open a draft PR.
-
-## Ticket
-- Linear ticket ID: ${ticket.ticketId}
-- Identifier: ${ticket.identifier}
-- URL: ${ticket.url}
-- Title: ${ticket.title}
-- Module: ${ticket.module}
-- Similar issue context: ${similarIssueContext}
-
-## Environment hints
-${environmentHints}
-
-## Ticket body
-\`\`\`
+Ticket body:
 ${ticket.body}
-\`\`\`
 
-## Workspace
-- Worktree path: ${worktreePath}
-- Branch: ${branch}
-- Regression test path: ${testPath}
-
-## Procedure
-1. cd into ${worktreePath}.
-2. Write ${testPath} first. It must be a focused regression test for this incident.
-3. Run the regression test and capture the failing output.
-4. If the reproduction is ambiguous, flaky, or the failure is not trustworthy, stop fixing and switch into the systematic-debugging skill workflow until the failure is clear.
-5. Write the minimal fix.
-6. Run the regression test again and capture the passing output.
-7. Run a focused regression guard against behavior that was already correct before the fix. The fix must not introduce new errors into working paths. Capture concise evidence from that guard step.
-${chromeSection}
-9. Create one commit containing the regression test and the fix.
-10. Push ${branch}.
-11. Open a draft PR. The PR body must include:
-   - the Linear ticket URL
-   - the red run output
-   - the green run output
-   - the regression-guard evidence
-   - a short fix summary
-   - Chrome verification evidence when you used Chrome MCP
-12. Print exactly one line and nothing after it:
-FIXER_RESULT {"status":"ok","prUrl":"https://github.com/org/repo/pull/123","testPath":"${testPath}","redEvidence":"...","greenEvidence":"...","regressionGuardEvidence":"...","chromeEvidence":"..."}
-
-## Hard constraints
-- The test must be written before the fix.
-- If the test passes before the fix, the test is wrong. Rewrite it or use systematic-debugging.
-- The PR must stay draft.
-- Only modify files inside ${worktreePath}.
-- If Chrome MCP is not used, omit "chromeEvidence" from the JSON instead of inventing it.
+Procedure:
+1. Write a focused regression test in tests/regressions/ first.
+2. Run it and prove it fails.
+3. If the repro is unclear, use systematic-debugging before changing code.
+4. Write the minimal fix.
+5. Run the regression test again and prove it passes.
+6. Run a regression guard proving already-correct behavior still works.
+7. If the bug is browser-visible, verify against ${targetAppUrl}. Use WebKit when the issue suggests Safari-like behavior. For layout or missing-element bugs, include accessibility tree diff evidence.
+8. Commit and push the branch with local git.
+9. Use GitHub MCP to open a draft PR.
+10. Print exactly one line:
+FIXER_RESULT {"status":"ok","prUrl":"...","testPath":"...","redEvidence":"...","greenEvidence":"...","regressionGuardEvidence":"...","browserVerificationEvidence":"..."}
 `;
 }
 ```
 
-- [ ] **Step 4: Run the prompt contract test again**
+- [ ] **Step 6: Run the prompt and ticket-context tests again**
 
 Run:
 
 ```bash
-pnpm test -- tests/prompts/fixer.test.ts
+pnpm test -- tests/linear/fetchTicketContext.test.ts tests/prompts/fixer.test.ts
 ```
 
-Expected: PASS with all seven prompt tests green.
+Expected: PASS with live ticket parsing and prompt contract covered.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add src/prompts/fixer.ts tests/prompts/fixer.test.ts
-git commit -m "P2 task 6: add fixer prompt with structured completion contract"
+git add src/linear/fetchTicketContext.ts src/prompts/fixer.ts tests/linear/fetchTicketContext.test.ts tests/prompts/fixer.test.ts
+git commit -m "P2 task 5: add localhost ticket context fetcher and fixer prompt"
 ```
 
-## Task 7 — Add The Linear Webhook Adapter
+## Task 6 — Add The Linear Webhook Adapter
 
 **Files:**
 - Create: `src/webhooks/linear.ts`
@@ -984,73 +878,24 @@ function sign(body: string, secret: string): string {
 }
 
 describe("POST /webhooks/linear", () => {
-  const secret = "lin-sec";
+  const secret = "lin-webhook-secret";
 
   beforeEach(() => {
     sendMock.mockReset();
     process.env.INNGEST_EVENT_KEY = "x";
     process.env.INNGEST_SIGNING_KEY = "x";
-    process.env.CODEX_BIN = "/usr/local/bin/codex";
+    process.env.OPENAI_API_KEY = "sk-test";
+    process.env.TARGET_APP_URL = "http://localhost:3001";
+    process.env.SENTRY_WEBHOOK_SECRET = "sentry-secret";
+    process.env.LINEAR_API_KEY = "lin_api_xxx";
     process.env.LINEAR_WEBHOOK_SECRET = secret;
-    process.env.TARGET_REPO_PATH = "/tmp/target";
-    process.env.TARGET_REPO_WORKTREE_ROOT = "/tmp/wt";
+    process.env.TARGET_REPO_PATH = "/tmp/repo";
+    process.env.TARGET_REPO_WORKTREE_ROOT = "/tmp/worktrees";
+    process.env.TARGET_REPO_REMOTE = "origin";
+    process.env.TARGET_REPO_BASE_BRANCH = "main";
   });
 
-  const bugBody = JSON.stringify({
-    action: "create",
-    type: "Issue",
-    data: {
-      id: "lin_123",
-      identifier: "BUG-42",
-      url: "https://linear.app/acme/issue/BUG-42",
-      title: "Checkout crash",
-      labels: [{ name: "bug" }, { name: "module:checkout" }],
-    },
-  });
-
-  it("rejects bad signatures", async () => {
-    const app = new Hono();
-    mountLinearWebhook(app);
-
-    const res = await app.request("/webhooks/linear", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "linear-signature": "deadbeef",
-      },
-      body: bugBody,
-    });
-
-    expect(res.status).toBe(401);
-    expect(sendMock).not.toHaveBeenCalled();
-  });
-
-  it("emits a normalized event for bug-labeled issue creates", async () => {
-    const app = new Hono();
-    mountLinearWebhook(app);
-
-    const res = await app.request("/webhooks/linear", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "linear-signature": sign(bugBody, secret),
-      },
-      body: bugBody,
-    });
-
-    expect(res.status).toBe(202);
-    expect(sendMock).toHaveBeenCalledWith({
-      name: "linear/ticket.created",
-      data: {
-        ticketId: "lin_123",
-        identifier: "BUG-42",
-        module: "checkout",
-        url: "https://linear.app/acme/issue/BUG-42",
-      },
-    });
-  });
-
-  it("falls back to unknown when no module label is present", async () => {
+  it("emits the normalized event for bug-labeled issues", async () => {
     const app = new Hono();
     mountLinearWebhook(app);
 
@@ -1058,11 +903,10 @@ describe("POST /webhooks/linear", () => {
       action: "create",
       type: "Issue",
       data: {
-        id: "lin_124",
-        identifier: "BUG-43",
-        url: "https://linear.app/acme/issue/BUG-43",
-        title: "Missing module",
-        labels: [{ name: "bug" }],
+        id: "lin_123",
+        identifier: "BUG-42",
+        url: "https://linear.app/acme/issue/BUG-42",
+        labels: [{ name: "bug" }, { name: "module:checkout" }],
       },
     });
 
@@ -1078,11 +922,16 @@ describe("POST /webhooks/linear", () => {
     expect(res.status).toBe(202);
     expect(sendMock).toHaveBeenCalledWith({
       name: "linear/ticket.created",
-      data: expect.objectContaining({ module: "unknown" }),
+      data: {
+        ticketId: "lin_123",
+        identifier: "BUG-42",
+        module: "checkout",
+        url: "https://linear.app/acme/issue/BUG-42",
+      },
     });
   });
 
-  it("ignores non-bug tickets", async () => {
+  it("returns 401 for an invalid signature", async () => {
     const app = new Hono();
     mountLinearWebhook(app);
 
@@ -1090,10 +939,37 @@ describe("POST /webhooks/linear", () => {
       action: "create",
       type: "Issue",
       data: {
-        id: "lin_125",
-        identifier: "FEAT-1",
-        url: "https://linear.app/acme/issue/FEAT-1",
-        title: "Feature request",
+        id: "lin_123",
+        identifier: "BUG-42",
+        url: "https://linear.app/acme/issue/BUG-42",
+        labels: [{ name: "bug" }],
+      },
+    });
+
+    const res = await app.request("/webhooks/linear", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "linear-signature": "deadbeef",
+      },
+      body,
+    });
+
+    expect(res.status).toBe(401);
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores non-bug issues", async () => {
+    const app = new Hono();
+    mountLinearWebhook(app);
+
+    const body = JSON.stringify({
+      action: "create",
+      type: "Issue",
+      data: {
+        id: "lin_123",
+        identifier: "BUG-42",
+        url: "https://linear.app/acme/issue/BUG-42",
         labels: [{ name: "feature" }],
       },
     });
@@ -1110,6 +986,42 @@ describe("POST /webhooks/linear", () => {
     expect(res.status).toBe(204);
     expect(sendMock).not.toHaveBeenCalled();
   });
+
+  it("falls back to unknown when the module label is missing", async () => {
+    const app = new Hono();
+    mountLinearWebhook(app);
+
+    const body = JSON.stringify({
+      action: "create",
+      type: "Issue",
+      data: {
+        id: "lin_123",
+        identifier: "BUG-42",
+        url: "https://linear.app/acme/issue/BUG-42",
+        labels: [{ name: "bug" }],
+      },
+    });
+
+    const res = await app.request("/webhooks/linear", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "linear-signature": sign(body, secret),
+      },
+      body,
+    });
+
+    expect(res.status).toBe(202);
+    expect(sendMock).toHaveBeenCalledWith({
+      name: "linear/ticket.created",
+      data: {
+        ticketId: "lin_123",
+        identifier: "BUG-42",
+        module: "unknown",
+        url: "https://linear.app/acme/issue/BUG-42",
+      },
+    });
+  });
 });
 ```
 
@@ -1123,7 +1035,7 @@ pnpm test -- tests/webhooks/linear.test.ts
 
 Expected: FAIL because `src/webhooks/linear.ts` does not exist.
 
-- [ ] **Step 3: Implement the webhook adapter**
+- [ ] **Step 3: Implement the webhook adapter and mount it**
 
 Create `src/webhooks/linear.ts`:
 
@@ -1133,19 +1045,7 @@ import { env } from "../config/env";
 import { inngest } from "../inngest/client";
 import { verifyHmacSha256 } from "./verify";
 
-interface LinearLabel {
-  name: string;
-}
-
-interface LinearIssueData {
-  id: string;
-  identifier: string;
-  url: string;
-  title: string;
-  labels?: LinearLabel[];
-}
-
-function extractModule(labels: LinearLabel[]): string {
+function extractModule(labels: Array<{ name: string }>): string {
   const moduleLabel = labels.find((label) => label.name.startsWith("module:"));
   return moduleLabel ? moduleLabel.name.slice("module:".length) : "unknown";
 }
@@ -1155,31 +1055,20 @@ export function mountLinearWebhook(app: Hono): void {
     const signature = c.req.header("linear-signature") ?? "";
     const body = await c.req.text();
 
-    if (
-      !verifyHmacSha256({
-        body,
-        signature,
-        secret: env.LINEAR_WEBHOOK_SECRET,
-      })
-    ) {
+    if (!verifyHmacSha256({ body, signature, secret: env.LINEAR_WEBHOOK_SECRET })) {
       return c.json({ error: "invalid signature" }, 401);
     }
 
     const parsed = JSON.parse(body) as {
       action: string;
       type: string;
-      data: LinearIssueData;
+      data: { id: string; identifier: string; url: string; labels?: Array<{ name: string }> };
     };
 
-    if (parsed.type !== "Issue" || parsed.action !== "create") {
-      return c.body(null, 204);
-    }
+    if (parsed.type !== "Issue" || parsed.action !== "create") return c.body(null, 204);
 
     const labels = parsed.data.labels ?? [];
-    const isBug = labels.some((label) => label.name === "bug");
-    if (!isBug) {
-      return c.body(null, 204);
-    }
+    if (!labels.some((label) => label.name === "bug")) return c.body(null, 204);
 
     await inngest.send({
       name: "linear/ticket.created",
@@ -1196,59 +1085,25 @@ export function mountLinearWebhook(app: Hono): void {
 }
 ```
 
-- [ ] **Step 4: Mount the webhook in the server and update the smoke test env**
-
-Update `src/server.ts`:
+ Mount it in `src/server.ts` by calling `mountLinearWebhook(app)` inside `buildApp()`, and update `tests/server.test.ts` so the `beforeEach` block sets the localhost env shape instead of `CODEX_BIN`:
 
 ```ts
-import { Hono } from "hono";
-import { serve } from "@hono/node-server";
-import { serve as inngestServe } from "inngest/hono";
-import { pathToFileURL } from "node:url";
-import { inngest } from "./inngest/client";
-import { functions } from "./inngest";
-import { env } from "./config/env";
-import { mountLinearWebhook } from "./webhooks/linear";
-
-export function buildApp(): Hono {
-  const app = new Hono();
-  app.get("/health", (c) => c.json({ ok: true }));
-  mountLinearWebhook(app);
-  app.on(
-    ["GET", "POST", "PUT"],
-    "/api/inngest",
-    inngestServe({ client: inngest, functions: [...functions] }),
-  );
-  return app;
-}
-
-const isMainModule = process.argv[1]
-  ? pathToFileURL(process.argv[1]).href === import.meta.url
-  : false;
-
-if (isMainModule) {
-  const app = buildApp();
-  serve({ fetch: app.fetch, port: env.PORT }, (info) => {
-    console.log(`Server on http://localhost:${info.port}`);
-    console.log(`Inngest: http://localhost:${info.port}/api/inngest`);
-  });
-}
+beforeEach(() => {
+  process.env.INNGEST_EVENT_KEY = "test";
+  process.env.INNGEST_SIGNING_KEY = "test";
+  process.env.OPENAI_API_KEY = "sk-test";
+  process.env.TARGET_APP_URL = "http://localhost:3001";
+  process.env.SENTRY_WEBHOOK_SECRET = "sentry-secret";
+  process.env.LINEAR_API_KEY = "lin_api_xxx";
+  process.env.LINEAR_WEBHOOK_SECRET = "lin-webhook-secret";
+  process.env.TARGET_REPO_PATH = "/tmp/repo";
+  process.env.TARGET_REPO_WORKTREE_ROOT = "/tmp/worktrees";
+  process.env.TARGET_REPO_REMOTE = "origin";
+  process.env.TARGET_REPO_BASE_BRANCH = "main";
+});
 ```
 
-Update the `beforeEach` block in `tests/server.test.ts`:
-
-```ts
-  beforeEach(() => {
-    process.env.INNGEST_EVENT_KEY = "test";
-    process.env.INNGEST_SIGNING_KEY = "test";
-    process.env.CODEX_BIN = "/usr/local/bin/codex";
-    process.env.LINEAR_WEBHOOK_SECRET = "lin-sec";
-    process.env.TARGET_REPO_PATH = "/tmp/target";
-    process.env.TARGET_REPO_WORKTREE_ROOT = "/tmp/wt";
-  });
-```
-
-- [ ] **Step 5: Run the webhook and server tests again**
+- [ ] **Step 4: Run the webhook and server tests again**
 
 Run:
 
@@ -1256,16 +1111,16 @@ Run:
 pnpm test -- tests/webhooks/linear.test.ts tests/server.test.ts
 ```
 
-Expected: PASS with webhook behavior covered and the existing server smoke tests still green.
+Expected: PASS with the webhook route mounted and tested.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src/webhooks/linear.ts src/server.ts tests/webhooks/linear.test.ts tests/server.test.ts
-git commit -m "P2 task 7: add Linear webhook adapter"
+git commit -m "P2 task 6: add localhost Linear webhook adapter"
 ```
 
-## Task 8 — Implement The Durable `on-linear-ticket` Flow
+## Task 7 — Implement The Durable `on-linear-ticket` Flow
 
 **Files:**
 - Create: `src/inngest/functions/onLinearTicket.ts`
@@ -1280,19 +1135,23 @@ Create `tests/inngest/onLinearTicket.test.ts`:
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("../../src/linear/fetchTicketContext", () => ({
-  fetchLinearTicketContext: vi.fn(),
+  fetchTicketContext: vi.fn(),
+}));
+vi.mock("../../src/git/updateCheckout", () => ({
+  updateCheckout: vi.fn(),
 }));
 vi.mock("../../src/git/worktree", () => ({
   createWorktree: vi.fn(),
   removeWorktree: vi.fn(),
 }));
-vi.mock("../../src/codex/invoke", () => ({
-  invokeCodex: vi.fn(),
+vi.mock("../../src/codex/fixer", () => ({
+  runFixer: vi.fn(),
 }));
 
-import { fetchLinearTicketContext } from "../../src/linear/fetchTicketContext";
+import { fetchTicketContext } from "../../src/linear/fetchTicketContext";
+import { updateCheckout } from "../../src/git/updateCheckout";
 import { createWorktree, removeWorktree } from "../../src/git/worktree";
-import { invokeCodex } from "../../src/codex/invoke";
+import { runFixer } from "../../src/codex/fixer";
 import {
   onLinearTicket,
   runLinearTicketFlow,
@@ -1323,10 +1182,22 @@ describe("onLinearTicket", () => {
   };
 
   beforeEach(() => {
-    vi.mocked(fetchLinearTicketContext).mockReset();
+    vi.mocked(fetchTicketContext).mockReset();
+    vi.mocked(updateCheckout).mockReset();
     vi.mocked(createWorktree).mockReset();
     vi.mocked(removeWorktree).mockReset();
-    vi.mocked(invokeCodex).mockReset();
+    vi.mocked(runFixer).mockReset();
+    process.env.INNGEST_EVENT_KEY = "x";
+    process.env.INNGEST_SIGNING_KEY = "x";
+    process.env.OPENAI_API_KEY = "sk-test";
+    process.env.TARGET_APP_URL = "http://localhost:3001";
+    process.env.SENTRY_WEBHOOK_SECRET = "sentry-secret";
+    process.env.LINEAR_API_KEY = "lin_api_xxx";
+    process.env.LINEAR_WEBHOOK_SECRET = "lin-webhook-secret";
+    process.env.TARGET_REPO_PATH = "/tmp/repo";
+    process.env.TARGET_REPO_WORKTREE_ROOT = "/tmp/worktrees";
+    process.env.TARGET_REPO_REMOTE = "origin";
+    process.env.TARGET_REPO_BASE_BRANCH = "main";
   });
 
   it("has id 'on-linear-ticket'", () => {
@@ -1337,8 +1208,8 @@ describe("onLinearTicket", () => {
     expect(functions).toContain(onLinearTicket);
   });
 
-  it("fetches context before creating the worktree and returns the parsed result", async () => {
-    vi.mocked(fetchLinearTicketContext).mockResolvedValue({
+  it("fetches ticket context, refreshes checkout, then creates the worktree", async () => {
+    vi.mocked(fetchTicketContext).mockResolvedValue({
       ticketId: "lin_123",
       identifier: "BUG-42",
       module: "checkout",
@@ -1346,112 +1217,84 @@ describe("onLinearTicket", () => {
       title: "Checkout crash",
       body: "Reproduction steps: 1. Open checkout",
       browserVisible: true,
-      similarIssueContext: "BUG-12 had the same cart flow",
-      environmentHints: {
-        browser: "webkit",
-        os: "macos",
-        viewport: "390x844",
-      },
+      similarIssueContext: "BUG-12 same flow",
+      environmentHints: { browser: "webkit", os: "macos", viewport: "390x844" },
     });
+    vi.mocked(updateCheckout).mockResolvedValue();
     vi.mocked(createWorktree).mockResolvedValue({
-      path: "/tmp/wt/BUG-42-abcd",
+      path: "/tmp/worktrees/BUG-42-abcd",
       branch: "fix/BUG-42-abcd",
     });
-    vi.mocked(invokeCodex).mockResolvedValue({
-      stdout: 'FIXER_RESULT {"status":"ok","prUrl":"https://github.com/acme/repo/pull/1","testPath":"tests/regressions/bug-42.spec.ts","redEvidence":"Expected 500","greenEvidence":"1 passed","regressionGuardEvidence":"Checkout total and button layout unchanged","chromeEvidence":"Checkout succeeds"}',
-      stderr: "",
-      exitCode: 0,
+    vi.mocked(runFixer).mockResolvedValue({
+      status: "ok",
+      prUrl: "https://github.com/acme/repo/pull/1",
+      testPath: "tests/regressions/bug-42.spec.ts",
+      redEvidence: "Expected 500",
+      greenEvidence: "1 passed",
+      regressionGuardEvidence: "other flows still pass",
+      browserVerificationEvidence: "localhost checkout succeeds",
     });
     vi.mocked(removeWorktree).mockResolvedValue();
 
     const { order, step } = createStepRecorder();
     const result = await runLinearTicketFlow({ event, step });
 
-    expect(order.slice(0, 3)).toEqual([
+    expect(order).toEqual([
       "fetch-ticket-context",
+      "update-checkout",
       "create-worktree",
       "build-prompt",
+      "run-fixer",
+      "remove-worktree",
     ]);
-    expect(result.prUrl).toBe("https://github.com/acme/repo/pull/1");
-    expect(removeWorktree).toHaveBeenCalledWith("/tmp/wt/BUG-42-abcd");
+    expect(result.prUrl).toContain("/pull/1");
   });
 
-  it("does not create a worktree when ticket context fetch fails", async () => {
-    vi.mocked(fetchLinearTicketContext).mockRejectedValue(
-      new Error("linear mcp unavailable"),
-    );
+  it("does not create a worktree when checkout refresh fails", async () => {
+    vi.mocked(fetchTicketContext).mockResolvedValue({
+      ticketId: "lin_123",
+      identifier: "BUG-42",
+      module: "checkout",
+      url: "https://linear.app/acme/issue/BUG-42",
+      title: "Checkout crash",
+      body: "Reproduction steps: 1. Open checkout",
+      browserVisible: false,
+      similarIssueContext: "",
+      environmentHints: { browser: "", os: "", viewport: "" },
+    });
+    vi.mocked(updateCheckout).mockRejectedValue(new Error("git fetch origin failed"));
 
     const { step } = createStepRecorder();
-    await expect(runLinearTicketFlow({ event, step })).rejects.toThrow(
-      /linear mcp unavailable/,
-    );
+    await expect(runLinearTicketFlow({ event, step })).rejects.toThrow(/git fetch origin failed/);
 
     expect(createWorktree).not.toHaveBeenCalled();
     expect(removeWorktree).not.toHaveBeenCalled();
   });
 
-  it("removes the worktree when Codex fails", async () => {
-    vi.mocked(fetchLinearTicketContext).mockResolvedValue({
+  it("removes the worktree when fixer execution fails", async () => {
+    vi.mocked(fetchTicketContext).mockResolvedValue({
       ticketId: "lin_123",
       identifier: "BUG-42",
       module: "checkout",
       url: "https://linear.app/acme/issue/BUG-42",
       title: "Checkout crash",
       body: "Reproduction steps: 1. Open checkout",
-      browserVisible: false,
-      similarIssueContext: "",
-      environmentHints: {
-        browser: "",
-        os: "",
-        viewport: "",
-      },
+      browserVisible: true,
+      similarIssueContext: "BUG-12 same flow",
+      environmentHints: { browser: "webkit", os: "macos", viewport: "390x844" },
     });
+    vi.mocked(updateCheckout).mockResolvedValue();
     vi.mocked(createWorktree).mockResolvedValue({
-      path: "/tmp/wt/BUG-42-abcd",
+      path: "/tmp/worktrees/BUG-42-abcd",
       branch: "fix/BUG-42-abcd",
     });
-    vi.mocked(invokeCodex).mockRejectedValue(new Error("codex exited 1: boom"));
+    vi.mocked(runFixer).mockRejectedValue(new Error("fixer failed"));
     vi.mocked(removeWorktree).mockResolvedValue();
 
     const { step } = createStepRecorder();
-    await expect(runLinearTicketFlow({ event, step })).rejects.toThrow(
-      /codex exited 1: boom/,
-    );
+    await expect(runLinearTicketFlow({ event, step })).rejects.toThrow(/fixer failed/);
 
-    expect(removeWorktree).toHaveBeenCalledWith("/tmp/wt/BUG-42-abcd");
-  });
-
-  it("fails when FIXER_RESULT is missing required proof", async () => {
-    vi.mocked(fetchLinearTicketContext).mockResolvedValue({
-      ticketId: "lin_123",
-      identifier: "BUG-42",
-      module: "checkout",
-      url: "https://linear.app/acme/issue/BUG-42",
-      title: "Checkout crash",
-      body: "Reproduction steps: 1. Open checkout",
-      browserVisible: false,
-      similarIssueContext: "",
-      environmentHints: {
-        browser: "",
-        os: "",
-        viewport: "",
-      },
-    });
-    vi.mocked(createWorktree).mockResolvedValue({
-      path: "/tmp/wt/BUG-42-abcd",
-      branch: "fix/BUG-42-abcd",
-    });
-    vi.mocked(invokeCodex).mockResolvedValue({
-      stdout: 'FIXER_RESULT {"status":"ok","prUrl":"https://github.com/acme/repo/pull/1","testPath":"tests/regressions/bug-42.spec.ts","redEvidence":"Expected 500","greenEvidence":"1 passed","regressionGuardEvidence":""}',
-      stderr: "",
-      exitCode: 0,
-    });
-    vi.mocked(removeWorktree).mockResolvedValue();
-
-    const { step } = createStepRecorder();
-    await expect(runLinearTicketFlow({ event, step })).rejects.toThrow(
-      /Incomplete FIXER_RESULT payload/,
-    );
+    expect(removeWorktree).toHaveBeenCalledWith("/tmp/worktrees/BUG-42-abcd");
   });
 });
 ```
@@ -1466,30 +1309,25 @@ pnpm test -- tests/inngest/onLinearTicket.test.ts
 
 Expected: FAIL because `src/inngest/functions/onLinearTicket.ts` does not exist.
 
-- [ ] **Step 3: Implement the function**
+- [ ] **Step 3: Implement the orchestrator**
 
 Create `src/inngest/functions/onLinearTicket.ts`:
 
 ```ts
-import { invokeCodex } from "../../codex/invoke";
-import { extractTaggedJson } from "../../codex/taggedJson";
+import { updateCheckout } from "../../git/updateCheckout";
 import { createWorktree, removeWorktree } from "../../git/worktree";
-import {
-  fetchLinearTicketContext,
-  type LinearTicketSeed,
-} from "../../linear/fetchTicketContext";
-import {
-  buildFixerPrompt,
-  type FixerCompletion,
-} from "../../prompts/fixer";
+import { fetchTicketContext, type TicketSeed } from "../../linear/fetchTicketContext";
+import { buildFixerPrompt } from "../../prompts/fixer";
+import { runFixer, type FixerResult } from "../../codex/fixer";
+import { env } from "../../config/env";
 import { inngest } from "../client";
-
-export interface LinearTicketCreatedEvent {
-  data: LinearTicketSeed;
-}
 
 interface StepLike {
   run<T>(id: string, fn: () => Promise<T> | T): Promise<T>;
+}
+
+export interface LinearTicketCreatedEvent {
+  data: TicketSeed;
 }
 
 export async function runLinearTicketFlow({
@@ -1498,16 +1336,13 @@ export async function runLinearTicketFlow({
 }: {
   event: LinearTicketCreatedEvent;
   step: StepLike;
-}): Promise<FixerCompletion> {
+}): Promise<FixerResult> {
   const seed = event.data;
 
-  const ticket = await step.run("fetch-ticket-context", () =>
-    fetchLinearTicketContext(seed),
-  );
+  const ticket = await step.run("fetch-ticket-context", () => fetchTicketContext(seed));
+  await step.run("update-checkout", () => updateCheckout());
 
-  const worktree = await step.run("create-worktree", () =>
-    createWorktree(seed.identifier),
-  );
+  const worktree = await step.run("create-worktree", () => createWorktree(seed.identifier));
 
   try {
     const prompt = await step.run("build-prompt", () =>
@@ -1515,32 +1350,13 @@ export async function runLinearTicketFlow({
         ticket,
         worktreePath: worktree.path,
         branch: worktree.branch,
+        targetAppUrl: env.TARGET_APP_URL,
       }),
     );
 
-    const stdout = await step.run("invoke-codex", async () => {
-      const result = await invokeCodex(prompt, {
-        cwd: worktree.path,
-        timeoutMs: 30 * 60 * 1000,
-      });
-      return result.stdout;
-    });
-
-    const completion = await step.run("parse-result", () =>
-      extractTaggedJson<FixerCompletion>(stdout, "FIXER_RESULT"),
+    return await step.run("run-fixer", () =>
+      runFixer({ prompt, cwd: worktree.path }),
     );
-
-    if (
-      completion.status !== "ok" ||
-      !completion.prUrl ||
-      !completion.redEvidence ||
-      !completion.greenEvidence ||
-      !completion.regressionGuardEvidence
-    ) {
-      throw new Error("Incomplete FIXER_RESULT payload");
-    }
-
-    return completion;
   } finally {
     await step.run("remove-worktree", () => removeWorktree(worktree.path));
   }
@@ -1556,10 +1372,11 @@ export const onLinearTicket = inngest.createFunction(
     ],
   },
   { event: "linear/ticket.created" },
-  async ({ event, step }) => runLinearTicketFlow({
-    event: event as LinearTicketCreatedEvent,
-    step,
-  }),
+  async ({ event, step }) =>
+    runLinearTicketFlow({
+      event: event as LinearTicketCreatedEvent,
+      step,
+    }),
 );
 ```
 
@@ -1574,7 +1391,7 @@ import { onLinearTicket } from "./functions/onLinearTicket";
 export const functions = [ping, onLinearTicket] as const;
 ```
 
-- [ ] **Step 5: Run the function test and a full type-aware verification pass**
+- [ ] **Step 5: Run the function test and the full verification pass**
 
 Run:
 
@@ -1587,45 +1404,44 @@ pnpm typecheck
 Expected:
 
 - `tests/inngest/onLinearTicket.test.ts`: PASS
-- `pnpm test`: PASS across the full suite
-- `pnpm typecheck`: PASS with no TypeScript errors
+- `pnpm test`: PASS
+- `pnpm typecheck`: PASS
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add src/inngest/functions/onLinearTicket.ts src/inngest/index.ts tests/inngest/onLinearTicket.test.ts
-git commit -m "P2 task 8: add durable on-linear-ticket workflow"
+git commit -m "P2 task 7: add durable localhost on-linear-ticket flow"
 ```
 
-## Task 9 — Document And Manually Validate P2
+## Task 8 — Document And Manually Validate Localhost P2
 
 **Files:**
 - Modify: `README.md`
 
-- [ ] **Step 1: Add P2 setup and manual validation notes to the README**
+- [ ] **Step 1: Add localhost P2 validation notes to `README.md`**
 
-Append this section to `README.md`:
+Append:
 
 ```md
-## P2 local validation
+## Localhost P2 validation
 
-Additional env vars for the fixer flow:
+Additional P2 env vars:
 
 - `LINEAR_WEBHOOK_SECRET`
 - `TARGET_REPO_PATH`
 - `TARGET_REPO_WORKTREE_ROOT`
+- `TARGET_REPO_REMOTE`
+- `TARGET_REPO_BASE_BRANCH`
 
-Manual webhook smoke test:
+Localhost P2 assumptions:
 
-1. Start `npx inngest-cli@latest dev`
-2. Start `pnpm dev`
-3. Create a bug-labeled Linear issue
-4. POST a signed Linear webhook to `/webhooks/linear`
-5. Confirm `linear/ticket.created` appears in Inngest and the fixer run cleans up its worktree
-6. For browser-specific bugs, confirm the ticket context includes browser, OS, and viewport hints
+- the target app is already running at `TARGET_APP_URL`
+- `TARGET_REPO_PATH` points to a local git checkout of the GitHub-backed repo
+- the checkout remote is configured and pushable
 ```
 
-- [ ] **Step 2: Re-run the automated suite after the docs change**
+- [ ] **Step 2: Re-run the automated suite**
 
 Run:
 
@@ -1634,11 +1450,11 @@ pnpm test
 pnpm typecheck
 ```
 
-Expected: PASS. The README change should not affect code or test behavior.
+Expected: PASS.
 
-- [ ] **Step 3: Run the manual webhook smoke test**
+- [ ] **Step 3: Run the manual localhost P2 smoke test**
 
-Use a real target repo for `TARGET_REPO_PATH`, then run:
+Use a real local checkout and a running localhost app, then:
 
 ```bash
 mkdir -p /tmp/incident-loop-worktrees
@@ -1647,7 +1463,7 @@ mkdir -p /tmp/incident-loop-worktrees
 Prepare the request body:
 
 ```bash
-BODY='{"action":"create","type":"Issue","data":{"id":"lin_123","identifier":"BUG-42","url":"https://linear.app/acme/issue/BUG-42","title":"Checkout crash","labels":[{"name":"bug"},{"name":"module:checkout"}]}}'
+BODY='{"action":"create","type":"Issue","data":{"id":"lin_123","identifier":"BUG-42","url":"https://linear.app/acme/issue/BUG-42","labels":[{"name":"bug"},{"name":"module:checkout"}]}}'
 ```
 
 Compute the signature:
@@ -1669,17 +1485,19 @@ curl -i \
 Expected:
 
 - HTTP response: `202 Accepted`
-- Inngest dev UI shows `linear/ticket.created`
-- the `on-linear-ticket` run fetches live ticket context
-- a worktree appears briefly under `$TARGET_REPO_WORKTREE_ROOT` and is removed on completion
-- success requires red/green evidence, regression-guard evidence, and a draft PR URL in the structured `FIXER_RESULT`
-- for Safari- or viewport-specific bugs, confirm the fix run uses matching Playwright or Chrome MCP settings
+- Inngest shows `linear/ticket.created`
+- the persistent checkout is refreshed before the worktree is created
+- a worktree appears briefly under `$TARGET_REPO_WORKTREE_ROOT` and is then removed
+- the branch is pushed to GitHub
+- GitHub MCP opens a draft PR
+- success requires red evidence, green evidence, regression-guard evidence, and a draft PR URL
+- for browser-visible bugs, localhost verification evidence reflects the ticket’s environment hints
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add README.md
-git commit -m "P2 task 9: document and validate fixer flow"
+git commit -m "P2 task 8: document and validate localhost fixer flow"
 ```
 
 ## P2 Done Criteria
@@ -1687,9 +1505,11 @@ git commit -m "P2 task 9: document and validate fixer flow"
 - [ ] Unit tests are green.
 - [ ] `pnpm typecheck` is clean.
 - [ ] The webhook emits the normalized repo-owned event shape.
-- [ ] The fixer fetches live ticket context through Codex + Linear MCP.
-- [ ] Missing `module:*` labels fall back to `unknown`.
-- [ ] Worktrees are always removed.
+- [ ] P2 refreshes the persistent checkout from GitHub before worktree creation.
+- [ ] P2 fetches live ticket context through Linear MCP.
+- [ ] Local git handles checkout refresh, worktree creation, commit, and push.
+- [ ] GitHub MCP handles draft PR creation.
 - [ ] Success requires explicit red evidence, green evidence, regression-guard evidence, and a draft PR URL.
-- [ ] Browser-visible bugs can attach Chrome MCP evidence without replacing the regression test as the main proof.
-- [ ] The committed regression test is the durable knowledge base for future bug prevention.
+- [ ] Browser-visible bugs can attach localhost verification evidence without replacing the regression test as the main proof.
+- [ ] Worktrees are always removed.
+- [ ] The committed regression test remains the durable knowledge base for future bug prevention.
