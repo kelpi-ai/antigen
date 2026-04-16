@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
+import type { Readable } from "node:stream";
 
 const spawnMock = vi.fn();
 vi.mock("node:child_process", () => ({
@@ -11,11 +12,11 @@ import { updateCheckout } from "../../src/git/updateCheckout";
 
 function fakeProc(opts: { stdout?: string; stderr?: string; exitCode: number | null }) {
   const proc = new EventEmitter() as unknown as ChildProcess & {
-    stdout: EventEmitter;
-    stderr: EventEmitter;
+    stdout: Readable;
+    stderr: Readable;
   };
-  proc.stdout = new EventEmitter();
-  proc.stderr = new EventEmitter();
+  proc.stdout = new EventEmitter() as Readable;
+  proc.stderr = new EventEmitter() as Readable;
 
   setImmediate(() => {
     if (opts.stdout) proc.stdout.emit("data", Buffer.from(opts.stdout));
@@ -46,8 +47,12 @@ describe("updateCheckout", () => {
     process.env.TARGET_REPO_BASE_BRANCH = "main";
     process.env.ARTIFACTS_DIR = "/tmp/artifacts";
     process.env.CHROME_PATH = "/usr/bin/chrome";
-    process.env.FFMPEG_BIN = "/usr/bin/ffmpeg";
-    process.env.PORT = "3001";
+  process.env.FFMPEG_BIN = "/usr/bin/ffmpeg";
+  process.env.PORT = "3001";
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
   });
 
   it("refreshes checkout with expected git commands", async () => {
@@ -101,5 +106,19 @@ describe("updateCheckout", () => {
       /git fetch origin.*no remote/,
     );
     expect(spawnMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws when pull fails", async () => {
+    spawnMock
+      .mockReturnValueOnce(fakeProc({ exitCode: 0 }))
+      .mockReturnValueOnce(fakeProc({ exitCode: 0 }))
+      .mockReturnValueOnce(
+        fakeProc({ exitCode: 1, stderr: "fatal: Not possible to fast-forward, aborting" }),
+      );
+
+    await expect(updateCheckout()).rejects.toThrow(
+      /git pull --ff-only origin main.*Not possible to fast-forward/,
+    );
+    expect(spawnMock).toHaveBeenCalledTimes(3);
   });
 });
