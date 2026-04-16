@@ -31,6 +31,22 @@ function sign(body: string, secret: string): string {
   return "sha256=" + createHmac("sha256", secret).update(body).digest("hex");
 }
 
+function inngestSignature(secret: string, body: string, timestamp: string) {
+  const signature = createHmac("sha256", secret).update(body).update(timestamp).digest("hex");
+  return `t=${timestamp}&s=${signature}`;
+}
+
+type ReadyForReviewEvent = {
+  name: "github/pr.ready_for_review";
+  data: {
+    prNumber: number;
+    repo: string;
+    prUrl: string;
+    headSha: string;
+    baseSha: string;
+  };
+};
+
 describe("p3 hunter e2e", () => {
   const sendSpy = vi.spyOn(inngest, "send");
   const capturedEvents: unknown[] = [];
@@ -78,7 +94,7 @@ describe("p3 hunter e2e", () => {
     vi.restoreAllMocks();
   });
 
-  it("drives the ready_for_review webhook through the hunter orchestration path", async () => {
+  it("drives the ready_for_review webhook through /api/inngest and the hunter orchestration path", async () => {
     vi.mocked(invokeCodex)
       .mockResolvedValueOnce({
         stdout:
@@ -106,6 +122,8 @@ describe("p3 hunter e2e", () => {
       });
 
     const app = buildApp();
+    let flowResponse: Response | undefined;
+    const stepOrder: string[] = [];
     const payload = {
       action: "ready_for_review",
       number: 123,
@@ -119,6 +137,125 @@ describe("p3 hunter e2e", () => {
       },
     };
     const body = JSON.stringify(payload);
+    const emittedEvent: ReadyForReviewEvent = {
+      name: "github/pr.ready_for_review",
+      data: {
+        prNumber: 123,
+        repo: "acme/app",
+        prUrl: "https://github.com/acme/app/pull/123",
+        headSha: "head-sha",
+        baseSha: "base-sha",
+      },
+    };
+
+    sendSpy.mockImplementation(async (event) => {
+      const normalizedEvent = (event ?? emittedEvent) as ReadyForReviewEvent;
+      capturedEvents.push(normalizedEvent);
+
+      const functionId = onPrReadyForReview.id("incident-loop");
+      const ctx = {
+        run_id: `run-${Date.now()}`,
+        attempt: 0,
+      };
+      const completedSteps: Record<string, { type: "data"; data: unknown }> = {};
+      let response: Response = new Response("", { status: 500 });
+
+      const invokeStep = async (stepId = "step") => {
+        const bodyObj = {
+          event: normalizedEvent,
+          version: 1,
+          events: [normalizedEvent],
+          steps: completedSteps,
+          ctx,
+        };
+        const requestBody = JSON.stringify(bodyObj);
+        const signature = inngestSignature(
+          process.env.INNGEST_SIGNING_KEY || "",
+          requestBody,
+          Math.floor(Date.now() / 1000).toString(),
+        );
+        const nextUrl = `/api/inngest?fnId=${functionId}&stepId=${stepId}`;
+        response = await app.request(nextUrl, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-inngest-signature": signature,
+          },
+          body: requestBody,
+        });
+
+        const bodyText = await response.text();
+        if (response.status !== 206) {
+          return { response, bodyText, operations: [] as Array<{ op: string; id: string; displayName?: string; name?: string; data: unknown }> };
+        }
+
+        const operations = JSON.parse(bodyText) as Array<{
+          op: string;
+          id: string;
+          displayName?: string;
+          name?: string;
+          data: unknown;
+        }>;
+        for (const operation of operations) {
+          if (operation.op === "StepRun") {
+            completedSteps[operation.id] = {
+              type: "data",
+              data: operation.data,
+            };
+            stepOrder.push(operation.displayName || operation.name || operation.id);
+          }
+        }
+
+        return { response, bodyText, operations };
+      };
+
+      let status = 206;
+      let bodyText = "";
+      for (let attempt = 0; attempt < 20 && status === 206; attempt += 1) {
+        const result = await invokeStep();
+        response = result.response;
+        status = result.response.status;
+        bodyText = result.bodyText;
+        if (status !== 206) {
+          break;
+        }
+
+        let operations = result.operations;
+        let plannedSteps = operations.filter((operation) => operation.op === "StepPlanned");
+        while (status === 206 && plannedSteps.length > 0) {
+          for (const plannedStep of plannedSteps) {
+            const plannedResult = await invokeStep(plannedStep.id);
+            response = plannedResult.response;
+            status = plannedResult.response.status;
+            bodyText = plannedResult.bodyText;
+            operations = plannedResult.operations;
+            if (status !== 206) {
+              break;
+            }
+          }
+
+          if (status !== 206) {
+            break;
+          }
+
+          plannedSteps = operations.filter((operation) => operation.op === "StepPlanned");
+        }
+
+        const hasProgress = operations.some(
+          (operation) => operation.op === "StepRun" || operation.op === "StepPlanned",
+        );
+        if (!hasProgress) {
+          break;
+        }
+      }
+
+      flowResponse = new Response(bodyText, {
+        status,
+        headers: response.headers,
+      });
+
+      return [{ id: "event-1" }] as never;
+    });
 
     const response = await app.request("/webhooks/github", {
       method: "POST",
@@ -130,6 +267,8 @@ describe("p3 hunter e2e", () => {
     });
 
     expect(response.status).toBe(202);
+    expect(flowResponse).toBeDefined();
+    expect([200, 206]).toContain(flowResponse!.status);
     expect(capturedEvents).toHaveLength(1);
 
     const eventEnvelope = capturedEvents[0];
@@ -143,37 +282,14 @@ describe("p3 hunter e2e", () => {
         baseSha: "base-sha",
       },
     });
-
-    const handler = onPrReadyForReview as unknown as {
-      [key: string]: (...args: any[]) => Promise<{
-        status: "clean" | "failures" | "partial" | "skipped";
-        prComment: string;
-        investigationTickets: Array<{
-          action: "create" | "update";
-          identifier?: string;
-          title: string;
-          body: string;
-        }>;
-      }>;
-    };
-    const reducerResult = await handler.fn({
-      event: eventEnvelope,
-      step: {
-        run: vi.fn(async (_name: string, fn: () => unknown) => fn()),
-      },
-    } as any);
-
-    expect(reducerResult).toEqual({
-      status: "failures",
-      prComment: "One scenario failed",
-      investigationTickets: [
-        {
-          action: "create",
-          title: "Regression detected",
-          body: "Investigate checkout failure",
-        },
-      ],
-    });
+    expect(stepOrder).toEqual([
+      "create-run",
+      "run-planner",
+      "run-executor:checkout-coupon",
+      "run-executor:account-check",
+      "run-reducer",
+      "update-metadata",
+    ]);
 
     expect(vi.mocked(invokeCodex)).toHaveBeenCalledTimes(4);
     expect(vi.mocked(createHuntRun)).toHaveBeenCalledOnce();

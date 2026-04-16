@@ -11,6 +11,7 @@ const {
   runCodexTaskMock,
   persistFixerTranscriptMock,
   parseFixerResultMock,
+  publishWorktreeFixMock,
   CodexTaskErrorMock,
 } = vi.hoisted(() => ({
   buildFixerPromptMock: vi.fn(),
@@ -23,6 +24,7 @@ const {
   runCodexTaskMock: vi.fn(),
   persistFixerTranscriptMock: vi.fn(),
   parseFixerResultMock: vi.fn(),
+  publishWorktreeFixMock: vi.fn(),
   CodexTaskErrorMock: class CodexTaskError extends Error {
     constructor(public output: unknown, message: string) {
       super(message);
@@ -55,6 +57,10 @@ vi.mock("../../src/codex/fixer", () => ({
   persistFixerTranscript: persistFixerTranscriptMock,
   parseFixerResult: parseFixerResultMock,
   CodexTaskError: CodexTaskErrorMock,
+}));
+
+vi.mock("../../src/git/publish", () => ({
+  publishWorktreeFix: publishWorktreeFixMock,
 }));
 
 import { functions } from "../../src/inngest";
@@ -131,6 +137,7 @@ describe("onLinearTicket", () => {
     runCodexTaskMock.mockReset();
     persistFixerTranscriptMock.mockReset();
     parseFixerResultMock.mockReset();
+    publishWorktreeFixMock.mockReset();
   });
 
   it("has id 'on-linear-ticket'", () => {
@@ -143,9 +150,8 @@ describe("onLinearTicket", () => {
 
   it("runs steps in the expected order", async () => {
     const { steps, step } = createStepRecorder();
-    const result = {
+    const proof = {
       status: "ok" as const,
-      prUrl: "https://example.test/pr/1",
       testPath: "tests/fix.spec.ts",
       redEvidence: "red",
       greenEvidence: "green",
@@ -164,7 +170,7 @@ describe("onLinearTicket", () => {
     buildFixerPromptMock.mockReturnValue("prompt-body");
     runCodexTaskMock.mockResolvedValue({
       stdout:
-        'LOG\nFIXER_RESULT {"status":"ok","prUrl":"https://example.test/pr/1","testPath":"tests/fix.spec.ts","redEvidence":"red","greenEvidence":"green","regressionGuardEvidence":"guard","e2eValidationEvidence":"e2e proof"}\n',
+        'LOG\nFIXER_RESULT {"status":"ok","testPath":"tests/fix.spec.ts","redEvidence":"red","greenEvidence":"green","regressionGuardEvidence":"guard","e2eValidationEvidence":"e2e proof"}\n',
       stderr: "",
       exitCode: 0,
       transcript: "[stdout]\ninstalling dependencies\n",
@@ -173,14 +179,20 @@ describe("onLinearTicket", () => {
       observer?.onEvent?.({ type: "persisted", path: "/tmp/artifacts/fixer-transcripts/abc-1.log" });
       return "/tmp/artifacts/fixer-transcripts/abc-1.log";
     });
-    parseFixerResultMock.mockReturnValue(result);
+    parseFixerResultMock.mockReturnValue(proof);
+    publishWorktreeFixMock.mockResolvedValue({
+      publishUrl: "https://github.com/barun1997/antigen/compare/main...fix/ABC-1-abcd?expand=1",
+    });
 
     const actual = await runLinearTicketFlow({
       event: { data: ticket },
       step,
     });
 
-    expect(actual).toEqual(result);
+    expect(actual).toEqual({
+      ...proof,
+      publishUrl: "https://github.com/barun1997/antigen/compare/main...fix/ABC-1-abcd?expand=1",
+    });
     expect(steps).toEqual([
       "fetch-ticket-context",
       "verify-target-checkout",
@@ -191,6 +203,7 @@ describe("onLinearTicket", () => {
       "run-fixer",
       "persist-fixer-transcript",
       "parse-fixer-result",
+      "publish-fix",
       "remove-worktree",
     ]);
     expect(buildFixerPromptMock).toHaveBeenCalledWith(
@@ -210,8 +223,14 @@ describe("onLinearTicket", () => {
       observer: expect.any(Object),
     });
     expect(parseFixerResultMock).toHaveBeenCalledWith(
-      'LOG\nFIXER_RESULT {"status":"ok","prUrl":"https://example.test/pr/1","testPath":"tests/fix.spec.ts","redEvidence":"red","greenEvidence":"green","regressionGuardEvidence":"guard","e2eValidationEvidence":"e2e proof"}\n',
+      'LOG\nFIXER_RESULT {"status":"ok","testPath":"tests/fix.spec.ts","redEvidence":"red","greenEvidence":"green","regressionGuardEvidence":"guard","e2eValidationEvidence":"e2e proof"}\n',
     );
+    expect(publishWorktreeFixMock).toHaveBeenCalledWith({
+      worktreePath: "/tmp/wt/ABC-1-abcd",
+      branch: "fix/ABC-1-abcd",
+      ticketIdentifier: "ABC-1",
+      ticketTitle: "Checkout spacing regression",
+    });
   });
 
   it("does not create or remove worktree if checkout refresh fails", async () => {
@@ -265,6 +284,7 @@ describe("onLinearTicket", () => {
     expect(runCodexTaskMock).toHaveBeenCalledTimes(1);
     expect(persistFixerTranscriptMock).toHaveBeenCalledTimes(0);
     expect(parseFixerResultMock).toHaveBeenCalledTimes(0);
+    expect(publishWorktreeFixMock).toHaveBeenCalledTimes(0);
 
     expect(removeWorktreeMock).toHaveBeenCalledWith("/tmp/wt/ABC-1-efgh");
   });
@@ -339,9 +359,8 @@ describe("onLinearTicket", () => {
 
   it("throws the cleanup failure when fixer succeeds but worktree removal fails", async () => {
     const { steps, step } = createStepRecorder();
-    const result = {
+    const proof = {
       status: "ok" as const,
-      prUrl: "https://example.test/pr/2",
       testPath: "tests/fix2.spec.ts",
       redEvidence: "red",
       greenEvidence: "green",
@@ -360,7 +379,7 @@ describe("onLinearTicket", () => {
     buildFixerPromptMock.mockReturnValue("prompt-body");
     runCodexTaskMock.mockResolvedValue({
       stdout:
-        'LOG\nFIXER_RESULT {"status":"ok","prUrl":"https://example.test/pr/2","testPath":"tests/fix2.spec.ts","redEvidence":"red","greenEvidence":"green","regressionGuardEvidence":"guard","e2eValidationEvidence":"e2e proof"}\n',
+        'LOG\nFIXER_RESULT {"status":"ok","testPath":"tests/fix2.spec.ts","redEvidence":"red","greenEvidence":"green","regressionGuardEvidence":"guard","e2eValidationEvidence":"e2e proof"}\n',
       stderr: "",
       exitCode: 0,
       transcript: "[stdout]\ninstalling dependencies\n",
@@ -372,7 +391,10 @@ describe("onLinearTicket", () => {
       });
       return "/tmp/artifacts/fixer-transcripts/abc-1.log";
     });
-    parseFixerResultMock.mockReturnValue(result);
+    parseFixerResultMock.mockReturnValue(proof);
+    publishWorktreeFixMock.mockResolvedValue({
+      publishUrl: "https://github.com/barun1997/antigen/compare/main...fix/ABC-1-mnop?expand=1",
+    });
     removeWorktreeMock.mockRejectedValue(new Error("cleanup failed"));
 
     await expect(
@@ -389,9 +411,60 @@ describe("onLinearTicket", () => {
       "run-fixer",
       "persist-fixer-transcript",
       "parse-fixer-result",
+      "publish-fix",
       "remove-worktree",
     ]);
     expect(removeWorktreeMock).toHaveBeenCalledWith("/tmp/wt/ABC-1-mnop");
+  });
+
+  it("removes the worktree when publish fails after the fixer proof passes", async () => {
+    const { steps, step } = createStepRecorder();
+
+    fetchTicketContextMock.mockResolvedValue(ticketContext);
+    verifyCheckoutMock.mockResolvedValue(undefined);
+    fetchCheckoutRemoteMock.mockResolvedValue(undefined);
+    pullCheckoutBaseBranchMock.mockResolvedValue(undefined);
+    createWorktreeMock.mockResolvedValue({
+      path: "/tmp/wt/ABC-1-publish",
+      branch: "fix/ABC-1-publish",
+    });
+    buildFixerPromptMock.mockReturnValue("prompt-body");
+    runCodexTaskMock.mockResolvedValue({
+      stdout:
+        'LOG\nFIXER_RESULT {"status":"ok","testPath":"tests/fix.spec.ts","redEvidence":"red","greenEvidence":"green","regressionGuardEvidence":"guard","e2eValidationEvidence":"e2e proof"}\n',
+      stderr: "",
+      exitCode: 0,
+      transcript: "[stdout]\ninstalling dependencies\n",
+    });
+    persistFixerTranscriptMock.mockResolvedValue("/tmp/artifacts/fixer-transcripts/abc-1.log");
+    parseFixerResultMock.mockReturnValue({
+      status: "ok",
+      testPath: "tests/fix.spec.ts",
+      redEvidence: "red",
+      greenEvidence: "green",
+      regressionGuardEvidence: "guard",
+      e2eValidationEvidence: "e2e proof",
+    });
+    publishWorktreeFixMock.mockRejectedValue(new Error("push failed"));
+
+    await expect(
+      runLinearTicketFlow({ event: { data: ticket }, step }),
+    ).rejects.toThrow(/push failed/);
+
+    expect(steps).toEqual([
+      "fetch-ticket-context",
+      "verify-target-checkout",
+      "fetch-target-remote",
+      "pull-target-base-branch",
+      "create-worktree",
+      "build-prompt",
+      "run-fixer",
+      "persist-fixer-transcript",
+      "parse-fixer-result",
+      "publish-fix",
+      "remove-worktree",
+    ]);
+    expect(removeWorktreeMock).toHaveBeenCalledWith("/tmp/wt/ABC-1-publish");
   });
 
   it("streams fixer output, persists the transcript, and parses in separate steps", async () => {
@@ -399,9 +472,8 @@ describe("onLinearTicket", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const result = {
+    const proof = {
       status: "ok" as const,
-      prUrl: "https://example.test/pr/1",
       testPath: "tests/fix.spec.ts",
       redEvidence: "red",
       greenEvidence: "green",
@@ -427,7 +499,7 @@ describe("onLinearTicket", () => {
 
         return {
           stdout:
-            'LOG\nFIXER_RESULT {"status":"ok","prUrl":"https://example.test/pr/1","testPath":"tests/fix.spec.ts","redEvidence":"red","greenEvidence":"green","regressionGuardEvidence":"guard","e2eValidationEvidence":"e2e proof"}\n',
+            'LOG\nFIXER_RESULT {"status":"ok","testPath":"tests/fix.spec.ts","redEvidence":"red","greenEvidence":"green","regressionGuardEvidence":"guard","e2eValidationEvidence":"e2e proof"}\n',
           stderr: "warn line\n",
           exitCode: 0,
           transcript: "[stdout]\ninstalling dependencies\n[stderr]\nwarn line\n",
@@ -441,14 +513,20 @@ describe("onLinearTicket", () => {
       });
       return "/tmp/artifacts/fixer-transcripts/abc-1.log";
     });
-    parseFixerResultMock.mockReturnValue(result);
+    parseFixerResultMock.mockReturnValue(proof);
+    publishWorktreeFixMock.mockResolvedValue({
+      publishUrl: "https://github.com/barun1997/antigen/compare/main...fix/ABC-1-abcd?expand=1",
+    });
 
     const actual = await runLinearTicketFlow({
       event: { data: ticket },
       step,
     });
 
-    expect(actual).toEqual(result);
+    expect(actual).toEqual({
+      ...proof,
+      publishUrl: "https://github.com/barun1997/antigen/compare/main...fix/ABC-1-abcd?expand=1",
+    });
     expect(steps).toEqual([
       "fetch-ticket-context",
       "verify-target-checkout",
@@ -459,6 +537,7 @@ describe("onLinearTicket", () => {
       "run-fixer",
       "persist-fixer-transcript",
       "parse-fixer-result",
+      "publish-fix",
       "remove-worktree",
     ]);
     expect(logSpy).toHaveBeenCalledWith("fixer.spawn", expect.objectContaining({ cwd: "/tmp/wt/ABC-1-abcd" }));
@@ -466,7 +545,11 @@ describe("onLinearTicket", () => {
     expect(errorSpy).toHaveBeenCalledWith("fixer.stderr", "warn line\n");
     expect(logSpy).toHaveBeenCalledWith("fixer.persisted", "/tmp/artifacts/fixer-transcripts/abc-1.log");
     expect(logSpy).toHaveBeenCalledWith("fixer.parse.start", "ABC-1");
-    expect(logSpy).toHaveBeenCalledWith("fixer.parse.ok", "https://example.test/pr/1");
+    expect(logSpy).toHaveBeenCalledWith("fixer.parse.ok", "tests/fix.spec.ts");
+    expect(logSpy).toHaveBeenCalledWith(
+      "fixer.publish.ok",
+      "https://github.com/barun1997/antigen/compare/main...fix/ABC-1-abcd?expand=1",
+    );
   });
 
   it("persists the transcript before rethrowing a fixer execution failure", async () => {

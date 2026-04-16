@@ -30,6 +30,7 @@ export interface InvokeOpts {
   timeoutMs?: number;
   model?: string;
   reasoningEffort?: string;
+  skipGitRepoCheck?: boolean;
   observer?: InvokeObserver;
   onStdoutChunk?: (chunk: string) => void;
   onStderrChunk?: (chunk: string) => void;
@@ -46,6 +47,10 @@ export function invokeCodex(prompt: string, opts: InvokeOpts = {}): Promise<Code
 
     if (opts.reasoningEffort) {
       args.push("-c", `model_reasoning_effort="${opts.reasoningEffort}"`);
+    }
+
+    if (opts.skipGitRepoCheck) {
+      args.push("--skip-git-repo-check");
     }
 
     args.push(prompt);

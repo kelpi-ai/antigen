@@ -5,13 +5,16 @@ import { CodexExecutionError, invokeCodex } from "./invoke";
 
 export interface FixerResult {
   status: "ok";
-  prUrl: string;
   testPath: string;
   redEvidence: string;
   greenEvidence: string;
   regressionGuardEvidence: string;
   e2eValidationEvidence: string;
   browserVerificationEvidence?: string;
+}
+
+export interface PublishedFixerResult extends FixerResult {
+  publishUrl: string;
 }
 
 export type FixerObserverEvent =
@@ -66,7 +69,7 @@ export async function runStructuredCodexTask(input: {
     const result = await invokeCodex(input.prompt, {
       cwd: input.cwd,
       model: getOptionalEnv("CODEX_MODEL"),
-      reasoningEffort: getOptionalEnv("CODEX_REASONING_EFFORT"),
+      reasoningEffort: getOptionalEnv("CODEX_REASONING_EFFORT") ?? "low",
       observer: {
         onStart(meta) {
           input.observer?.onEvent?.({ type: "spawn", ...meta });
@@ -149,7 +152,6 @@ export async function persistFixerTranscript(input: {
 const RESULT_PREFIX = "FIXER_RESULT ";
 const REQUIRED_FIELDS: (keyof FixerResult)[] = [
   "status",
-  "prUrl",
   "testPath",
   "redEvidence",
   "greenEvidence",
@@ -183,7 +185,6 @@ export function parseFixerResult(stdout: string): FixerResult {
 
   return {
     status: "ok",
-    prUrl: parsed.prUrl!,
     testPath: parsed.testPath!,
     redEvidence: parsed.redEvidence!,
     greenEvidence: parsed.greenEvidence!,

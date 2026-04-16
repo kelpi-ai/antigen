@@ -3,9 +3,19 @@ import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import type { Readable } from "node:stream";
 
-const spawnMock = vi.fn();
+const { spawnMock, accessMock, symlinkMock } = vi.hoisted(() => ({
+  spawnMock: vi.fn(),
+  accessMock: vi.fn(),
+  symlinkMock: vi.fn(),
+}));
+
 vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
+}));
+
+vi.mock("node:fs/promises", () => ({
+  access: (...args: unknown[]) => accessMock(...args),
+  symlink: (...args: unknown[]) => symlinkMock(...args),
 }));
 
 import { createWorktree, removeWorktree } from "../../src/git/worktree";
@@ -39,6 +49,8 @@ describe("worktree helpers", () => {
   beforeEach(() => {
     process.env = { ...originalEnv };
     spawnMock.mockReset();
+    accessMock.mockReset();
+    symlinkMock.mockReset();
 
     process.env.INNGEST_EVENT_KEY = "event-key";
     process.env.INNGEST_SIGNING_KEY = "signing-key";
@@ -55,6 +67,9 @@ describe("worktree helpers", () => {
     process.env.CHROME_PATH = "/usr/local/bin/chrome";
     process.env.FFMPEG_BIN = "/usr/local/bin/ffmpeg";
     process.env.PORT = "3000";
+
+    accessMock.mockRejectedValue(Object.assign(new Error("missing"), { code: "ENOENT" }));
+    symlinkMock.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -74,6 +89,23 @@ describe("worktree helpers", () => {
       "git",
       ["worktree", "add", "-b", result.branch, result.path, "main"],
       expect.objectContaining({ cwd: "/tmp/repo" }),
+    );
+  });
+
+  it("symlinks node_modules into the new worktree when the parent checkout has dependencies", async () => {
+    spawnMock.mockReturnValueOnce(fakeProc({ exitCode: 0 }));
+    accessMock
+      .mockImplementationOnce(async () => undefined)
+      .mockImplementationOnce(async () => {
+        throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      });
+
+    const result = await createWorktree("BUG-42");
+
+    expect(symlinkMock).toHaveBeenCalledWith(
+      "/tmp/repo/node_modules",
+      `${result.path}/node_modules`,
+      "dir",
     );
   });
 

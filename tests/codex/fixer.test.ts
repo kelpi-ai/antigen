@@ -57,14 +57,13 @@ describe("fixer", () => {
     it("parses FIXER_RESULT JSON from stdout", () => {
       const stdout = [
         "some preamble",
-        'FIXER_RESULT {"status":"ok","prUrl":"https://example.test/pr/1","testPath":"tests/fix.spec.ts","redEvidence":"red","greenEvidence":"green","regressionGuardEvidence":"guard","e2eValidationEvidence":"e2e proof"}',
+        'FIXER_RESULT {"status":"ok","testPath":"tests/fix.spec.ts","redEvidence":"red","greenEvidence":"green","regressionGuardEvidence":"guard","e2eValidationEvidence":"e2e proof"}',
       ].join("\n");
 
       const parsed = parseFixerResult(stdout);
 
       expect(parsed).toEqual({
         status: "ok",
-        prUrl: "https://example.test/pr/1",
         testPath: "tests/fix.spec.ts",
         redEvidence: "red",
         greenEvidence: "green",
@@ -75,7 +74,7 @@ describe("fixer", () => {
 
     it("throws when proof fields are missing", () => {
       const stdout = [
-        'FIXER_RESULT {"status":"ok","prUrl":"https://example.test/pr/1","testPath":"tests/fix.spec.ts","greenEvidence":"green","regressionGuardEvidence":"guard","e2eValidationEvidence":"e2e proof"}',
+        'FIXER_RESULT {"status":"ok","testPath":"tests/fix.spec.ts","greenEvidence":"green","regressionGuardEvidence":"guard","e2eValidationEvidence":"e2e proof"}',
       ].join("\n");
 
       expect(() => parseFixerResult(stdout)).toThrow(/missing required proof/);
@@ -118,7 +117,7 @@ describe("fixer", () => {
       );
     });
 
-    it("omits model overrides when env is not set", async () => {
+    it("defaults reasoning effort to low when env is not set", async () => {
       invokeCodexMock.mockResolvedValue({ stdout: "done", stderr: "", exitCode: 0 });
 
       await runStructuredCodexTask({
@@ -130,7 +129,7 @@ describe("fixer", () => {
         expect.objectContaining({
           cwd: undefined,
           model: undefined,
-          reasoningEffort: undefined,
+          reasoningEffort: "low",
           observer: expect.objectContaining({
             onStart: expect.any(Function),
             onStdout: expect.any(Function),
@@ -149,7 +148,7 @@ describe("fixer", () => {
         opts.observer.onStderr("warn\n");
         opts.observer.onExit({ exitCode: 0 });
         return {
-          stdout: "alpha\nFIXER_RESULT {\"status\":\"ok\",\"prUrl\":\"https://example.test/pr/2\",\"testPath\":\"tests/fix2.spec.ts\",\"redEvidence\":\"red\",\"greenEvidence\":\"green\",\"regressionGuardEvidence\":\"guard\",\"e2eValidationEvidence\":\"e2e proof\"}\n",
+          stdout: "alpha\nFIXER_RESULT {\"status\":\"ok\",\"testPath\":\"tests/fix2.spec.ts\",\"redEvidence\":\"red\",\"greenEvidence\":\"green\",\"regressionGuardEvidence\":\"guard\",\"e2eValidationEvidence\":\"e2e proof\"}\n",
           stderr: "warn\n",
           exitCode: 0,
         };
@@ -215,7 +214,7 @@ describe("fixer", () => {
     it("parses result from runCodexTask", async () => {
       invokeCodexMock.mockResolvedValue({
         stdout:
-          'LOG\nFIXER_RESULT {"status":"ok","prUrl":"https://example.test/pr/2","testPath":"tests/fix2.spec.ts","redEvidence":"red","greenEvidence":"green","regressionGuardEvidence":"guard","e2eValidationEvidence":"e2e proof","browserVerificationEvidence":"browser"}\n',
+          'LOG\nFIXER_RESULT {"status":"ok","testPath":"tests/fix2.spec.ts","redEvidence":"red","greenEvidence":"green","regressionGuardEvidence":"guard","e2eValidationEvidence":"e2e proof","browserVerificationEvidence":"browser"}\n',
         stderr: "",
         exitCode: 0,
       });
@@ -230,7 +229,7 @@ describe("fixer", () => {
         expect.objectContaining({
           cwd: "/tmp/repo2",
           model: undefined,
-          reasoningEffort: undefined,
+          reasoningEffort: "low",
           observer: expect.objectContaining({
             onStart: expect.any(Function),
             onStdout: expect.any(Function),
@@ -241,7 +240,6 @@ describe("fixer", () => {
       );
       expect(result).toEqual({
         status: "ok",
-        prUrl: "https://example.test/pr/2",
         testPath: "tests/fix2.spec.ts",
         redEvidence: "red",
         greenEvidence: "green",

@@ -53,7 +53,6 @@ async function runWithScenario(
   event: ReadyForReviewEvent,
   previewUrl: string,
   scenario: HuntScenario,
-  step?: RunPrHunterInput["step"],
 ) {
   const workspace = await createScenarioWorkspace({
     runDir,
@@ -71,22 +70,18 @@ async function runWithScenario(
       wsEndpoint: session.wsEndpoint,
     });
 
-    const result = await runStep(
-      step,
-      `run-executor:${scenario.id}`,
-      () =>
-        invokeCodex(
-          buildHunterExecutorPrompt({
-            prNumber: event.prNumber,
-            previewUrl,
-            scenario,
-            screenshotPath: workspace.screenshotPath,
-          }),
-          {
-            cwd: workspace.scenarioDir,
-            ...codexLoggers(`executor:${scenario.id}`),
-          },
-        ),
+    const result = await invokeCodex(
+      buildHunterExecutorPrompt({
+        prNumber: event.prNumber,
+        previewUrl,
+        scenario,
+        screenshotPath: workspace.screenshotPath,
+      }),
+      {
+        cwd: workspace.scenarioDir,
+        skipGitRepoCheck: true,
+        ...codexLoggers(`executor:${scenario.id}`),
+      },
     );
 
     return extractTaggedJson<ExecutorResult>(result.stdout, "P3_EXECUTOR_JSON");
@@ -119,6 +114,7 @@ async function runReducer(
   const result = await runStep(step, "run-reducer", () =>
     invokeCodex(reducerPrompt, {
       cwd: runDir,
+      skipGitRepoCheck: true,
       ...codexLoggers("reducer"),
     }),
   );
@@ -178,6 +174,7 @@ export async function runPrHunter({
         }),
         {
           cwd: run.runDir,
+          skipGitRepoCheck: true,
           ...codexLoggers("planner"),
         },
       ),
@@ -221,12 +218,16 @@ export async function runPrHunter({
       scenario: HuntScenario,
     ): Promise<ExecutorOutcome> => {
       try {
-        const result = await runWithScenario(
-          run.runDir,
-          event,
-          previewUrl,
-          scenario,
+        const result = await runStep(
           step,
+          `run-executor:${scenario.id}`,
+          () =>
+            runWithScenario(
+              run.runDir,
+              event,
+              previewUrl,
+              scenario,
+            ),
         );
         return { status: "ok", result };
       } catch (error) {

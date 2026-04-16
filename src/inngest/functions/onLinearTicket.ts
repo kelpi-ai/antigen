@@ -5,7 +5,7 @@ import {
   parseFixerResult,
   persistFixerTranscript,
   runCodexTask,
-  type FixerResult,
+  type PublishedFixerResult,
 } from "../../codex/fixer";
 import type { TicketSeed } from "../../linear/fetchTicketContext";
 import { fetchTicketContext } from "../../linear/fetchTicketContext";
@@ -15,6 +15,7 @@ import {
   verifyCheckout,
 } from "../../git/updateCheckout";
 import { createWorktree, removeWorktree } from "../../git/worktree";
+import { publishWorktreeFix } from "../../git/publish";
 import { buildFixerPrompt } from "../../prompts/fixer";
 import { p2Env } from "../../config/env";
 import { inngest } from "../client";
@@ -72,7 +73,7 @@ export async function runLinearTicketFlow({
 }: {
   event: LinearTicketCreatedEvent;
   step: StepLike;
-}): Promise<FixerResult> {
+}): Promise<PublishedFixerResult> {
   const ticket = await step.run("fetch-ticket-context", () => fetchTicketContext(event.data));
 
   await step.run("verify-target-checkout", () => verifyCheckout());
@@ -136,12 +137,28 @@ export async function runLinearTicketFlow({
       throw fixerRun.failure;
     }
 
-    return await step.run("parse-fixer-result", async () => {
+    const parsed = await step.run("parse-fixer-result", async () => {
       console.log("fixer.parse.start", ticket.identifier);
-      const parsed = parseFixerResult(fixerOutput!.stdout);
-      console.log("fixer.parse.ok", parsed.prUrl);
-      return parsed;
+      const proof = parseFixerResult(fixerOutput!.stdout);
+      console.log("fixer.parse.ok", proof.testPath);
+      return proof;
     });
+
+    const published = await step.run("publish-fix", async () => {
+      const result = await publishWorktreeFix({
+        worktreePath: worktree.path,
+        branch: worktree.branch,
+        ticketIdentifier: ticket.identifier,
+        ticketTitle: ticket.title,
+      });
+      console.log("fixer.publish.ok", result.publishUrl);
+      return result;
+    });
+
+    return {
+      ...parsed,
+      publishUrl: published.publishUrl,
+    };
   } catch (error) {
     primaryError = error;
   } finally {

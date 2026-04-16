@@ -12,6 +12,7 @@ const {
   runCodexTaskMock,
   persistFixerTranscriptMock,
   parseFixerResultMock,
+  publishWorktreeFixMock,
 } = vi.hoisted(() => ({
   fetchTicketContextMock: vi.fn(),
   verifyCheckoutMock: vi.fn(),
@@ -23,6 +24,7 @@ const {
   runCodexTaskMock: vi.fn(),
   persistFixerTranscriptMock: vi.fn(),
   parseFixerResultMock: vi.fn(),
+  publishWorktreeFixMock: vi.fn(),
 }));
 
 vi.mock("../../src/linear/fetchTicketContext", () => ({
@@ -48,6 +50,10 @@ vi.mock("../../src/codex/fixer", () => ({
   runCodexTask: runCodexTaskMock,
   persistFixerTranscript: persistFixerTranscriptMock,
   parseFixerResult: parseFixerResultMock,
+}));
+
+vi.mock("../../src/git/publish", () => ({
+  publishWorktreeFix: publishWorktreeFixMock,
 }));
 
 import { buildApp } from "../../src/server";
@@ -95,6 +101,7 @@ describe("linear p2 localhost flow", () => {
     runCodexTaskMock.mockReset();
     persistFixerTranscriptMock.mockReset();
     parseFixerResultMock.mockReset();
+    publishWorktreeFixMock.mockReset();
   });
 
   it("posts the webhook, executes linear flow through /api/inngest in-process", async () => {
@@ -136,7 +143,7 @@ describe("linear p2 localhost flow", () => {
     buildFixerPromptMock.mockReturnValue("run final automated e2e validation and fix");
     runCodexTaskMock.mockResolvedValue({
       stdout:
-        'LOG\nFIXER_RESULT {"status":"ok","prUrl":"https://example.test/pull/1","testPath":"tests/fixes/bug-999.spec.ts","redEvidence":"red proof","greenEvidence":"green proof","regressionGuardEvidence":"guard proof","e2eValidationEvidence":"e2e proof"}\n',
+        'LOG\nFIXER_RESULT {"status":"ok","testPath":"tests/fixes/bug-999.spec.ts","redEvidence":"red proof","greenEvidence":"green proof","regressionGuardEvidence":"guard proof","e2eValidationEvidence":"e2e proof"}\n',
       stderr: "",
       exitCode: 0,
       transcript: "[stdout]\ninstalling dependencies\n",
@@ -146,12 +153,14 @@ describe("linear p2 localhost flow", () => {
     );
     parseFixerResultMock.mockReturnValue({
       status: "ok",
-      prUrl: "https://example.test/pull/1",
       testPath: "tests/fixes/bug-999.spec.ts",
       redEvidence: "red proof",
       greenEvidence: "green proof",
       regressionGuardEvidence: "guard proof",
       e2eValidationEvidence: "e2e proof",
+    });
+    publishWorktreeFixMock.mockResolvedValue({
+      publishUrl: "https://github.com/barun1997/antigen/compare/main...fix/BUG-999-abc?expand=1",
     });
 
     sendSpy.mockImplementation(async (event) => {
@@ -270,6 +279,7 @@ describe("linear p2 localhost flow", () => {
       "run-fixer",
       "persist-fixer-transcript",
       "parse-fixer-result",
+      "publish-fix",
       "remove-worktree",
     ]);
     expect(sendSpy).toHaveBeenCalledTimes(1);
@@ -301,8 +311,14 @@ describe("linear p2 localhost flow", () => {
       observer: expect.any(Object),
     });
     expect(parseFixerResultMock).toHaveBeenCalledWith(
-      'LOG\nFIXER_RESULT {"status":"ok","prUrl":"https://example.test/pull/1","testPath":"tests/fixes/bug-999.spec.ts","redEvidence":"red proof","greenEvidence":"green proof","regressionGuardEvidence":"guard proof","e2eValidationEvidence":"e2e proof"}\n',
+      'LOG\nFIXER_RESULT {"status":"ok","testPath":"tests/fixes/bug-999.spec.ts","redEvidence":"red proof","greenEvidence":"green proof","regressionGuardEvidence":"guard proof","e2eValidationEvidence":"e2e proof"}\n',
     );
+    expect(publishWorktreeFixMock).toHaveBeenCalledWith({
+      worktreePath: "/tmp/worktrees/BUG-999-abc",
+      branch: "fix/BUG-999-abc",
+      ticketIdentifier: "BUG-999",
+      ticketTitle: "Checkout validation bug",
+    });
     expect(removeWorktreeMock).toHaveBeenCalledWith("/tmp/worktrees/BUG-999-abc");
 
     const fetchCall = fetchTicketContextMock.mock.invocationCallOrder[0];

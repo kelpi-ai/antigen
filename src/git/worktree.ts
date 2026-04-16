@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
+import { access, symlink } from "node:fs/promises";
 import { join } from "node:path";
 
 import { p2Env } from "../config/env";
@@ -57,9 +58,28 @@ export async function createWorktree(
   const branch = `fix/${ticketId}-${suffix}`;
   const path = join(p2Env.TARGET_REPO_WORKTREE_ROOT, `${ticketId}-${suffix}`);
   await runGit(["worktree", "add", "-b", branch, path, p2Env.TARGET_REPO_BASE_BRANCH]);
+  await bootstrapWorktreeNodeModules(path);
   return { path, branch };
 }
 
 export async function removeWorktree(path: string): Promise<void> {
   await runGit(["worktree", "remove", "--force", path]);
+}
+
+async function bootstrapWorktreeNodeModules(worktreePath: string): Promise<void> {
+  const source = join(p2Env.TARGET_REPO_PATH, "node_modules");
+  const destination = join(worktreePath, "node_modules");
+
+  try {
+    await access(source);
+  } catch {
+    return;
+  }
+
+  try {
+    await access(destination);
+    return;
+  } catch {}
+
+  await symlink(source, destination, "dir");
 }

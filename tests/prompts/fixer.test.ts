@@ -21,7 +21,7 @@ describe("buildFixerPrompt", () => {
     },
   };
 
-  it("contains red, green, regression guard, and GitHub MCP instructions", () => {
+  it("contains red, green, regression guard, and structured result instructions", () => {
     const prompt = buildFixerPrompt({
       ticket,
       worktreePath: "/tmp/repo",
@@ -32,9 +32,8 @@ describe("buildFixerPrompt", () => {
     expect(prompt).toContain("red-green");
     expect(prompt).toContain("end-to-end");
     expect(prompt).toContain("regression guard");
-    expect(prompt).toContain("GitHub MCP");
     expect(prompt).toContain("systematic-debugging");
-    expect(prompt).toContain('FIXER_RESULT {"status":"ok","prUrl":');
+    expect(prompt).toContain('FIXER_RESULT {"status":"ok","testPath":');
     expect(prompt).toContain('"status":"ok"');
     expect(prompt).toContain('"testPath"');
     expect(prompt).toContain('"redEvidence"');
@@ -43,7 +42,7 @@ describe("buildFixerPrompt", () => {
     expect(prompt).toContain('"e2eValidationEvidence"');
   });
 
-  it("contains target app URL, environment hints, and accessibility tree diff guidance", () => {
+  it("contains target app URL, environment hints, and fallback validation guidance", () => {
     const prompt = buildFixerPrompt({
       ticket,
       worktreePath: "/tmp/repo",
@@ -55,8 +54,10 @@ describe("buildFixerPrompt", () => {
     expect(prompt).toContain("browser: Chromium");
     expect(prompt).toContain("viewport: 1366x768");
     expect(prompt).toContain("accessibility tree diff");
-    expect(prompt).toContain("commit and push");
-    expect(prompt).toContain("open a draft PR");
+    expect(prompt).toContain("signed-webhook or in-process end-to-end test harness");
+    expect(prompt).toContain("host process will publish");
+    expect(prompt).not.toContain("commit and push");
+    expect(prompt).not.toContain("open a draft PR");
     expect(prompt).toContain("final automated end-to-end validation");
   });
 

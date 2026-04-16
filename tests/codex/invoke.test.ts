@@ -89,6 +89,18 @@ describe("invokeCodex", () => {
     );
   });
 
+  it("passes through skip-git-repo-check when requested", async () => {
+    spawnMock.mockReturnValue(fakeProc({ stdout: "done", exitCode: 0 }));
+
+    await invokeCodex("reproduce issue 123", { skipGitRepoCheck: true });
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      "/usr/local/bin/codex",
+      ["exec", "--full-auto", "--skip-git-repo-check", "reproduce issue 123"],
+      expect.objectContaining({ stdio: ["ignore", "pipe", "pipe"] }),
+    );
+  });
+
   it("falls back to codex binary when CODEX_BIN is unset", async () => {
     delete process.env.CODEX_BIN;
     spawnMock.mockReturnValue(fakeProc({ stdout: "done", exitCode: 0 }));

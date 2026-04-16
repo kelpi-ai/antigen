@@ -5,6 +5,7 @@ vi.mock("../../src/p3/orchestrate", () => ({
   runPrHunter: vi.fn(),
 }));
 
+import { functions } from "../../src/inngest";
 import { onPrReadyForReview } from "../../src/inngest/functions/onPrReadyForReview";
 import { runPrHunter } from "../../src/p3/orchestrate";
 
@@ -17,6 +18,10 @@ describe("on-pr-ready-for-review", () => {
       retries: 1,
       concurrency: { limit: 1, key: "event.data.prNumber" },
     });
+  });
+
+  it("is registered in the barrel", () => {
+    expect(functions).toContain(onPrReadyForReview);
   });
 
   it("delegates event payload to runPrHunter", async () => {

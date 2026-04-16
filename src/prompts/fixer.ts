@@ -63,11 +63,12 @@ If reproduction is unclear, use systematic-debugging to narrow down assumptions 
 
 If this is a browser-visible bug, verify with browser runs against the provided URL and include browserVerificationEvidence.
 For layout or missing-element issues, include an accessibility tree diff as part of your validation.
+If target app URL ${input.targetAppUrl} is unreachable from this environment, fall back to the repository's existing signed-webhook or in-process end-to-end test harness and cite that proof.
 
-When finished, commit and push with local git.
-Then use GitHub MCP to open a draft PR.
+Leave the verified code changes in the current worktree.
+Do not commit, push, or open pull requests from this run. The host process will publish the branch after you return the structured result.
 
 Return exactly one line:
-FIXER_RESULT {"status":"ok","prUrl":"<url>","testPath":"<path>","redEvidence":"<red proof>","greenEvidence":"<green proof>","regressionGuardEvidence":"<regression proof>","e2eValidationEvidence":"<automated e2e proof>","browserVerificationEvidence":"<optional browser proof>"}
+FIXER_RESULT {"status":"ok","testPath":"<path>","redEvidence":"<red proof>","greenEvidence":"<green proof>","regressionGuardEvidence":"<regression proof>","e2eValidationEvidence":"<automated e2e proof>","browserVerificationEvidence":"<optional browser proof>"}
 `.trim();
 }
