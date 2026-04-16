@@ -16,7 +16,7 @@ import {
 } from "../../git/updateCheckout";
 import { createWorktree, removeWorktree } from "../../git/worktree";
 import { buildFixerPrompt } from "../../prompts/fixer";
-import { env } from "../../config/env";
+import { p2Env } from "../../config/env";
 import { inngest } from "../client";
 
 function truncateChunk(chunk: string, maxLength = 400): string {
@@ -88,7 +88,7 @@ export async function runLinearTicketFlow({
         ticket,
         worktreePath: worktree.path,
         branch: worktree.branch,
-        targetAppUrl: env.TARGET_APP_URL,
+        targetAppUrl: p2Env.TARGET_APP_URL,
       }),
     );
 

@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 
-import { env } from "../config/env";
+import { p2Env } from "../config/env";
 
 interface GitResult {
   stdout: string;
@@ -17,7 +17,7 @@ function runGit(args: string[]): Promise<GitResult> {
     try {
       proc = spawn("git", args, {
         stdio: ["ignore", "pipe", "pipe"],
-        cwd: env.TARGET_REPO_PATH,
+        cwd: p2Env.TARGET_REPO_PATH,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -55,8 +55,8 @@ export async function createWorktree(
 ): Promise<{ path: string; branch: string }> {
   const suffix = randomBytes(4).toString("hex");
   const branch = `fix/${ticketId}-${suffix}`;
-  const path = join(env.TARGET_REPO_WORKTREE_ROOT, `${ticketId}-${suffix}`);
-  await runGit(["worktree", "add", "-b", branch, path, env.TARGET_REPO_BASE_BRANCH]);
+  const path = join(p2Env.TARGET_REPO_WORKTREE_ROOT, `${ticketId}-${suffix}`);
+  await runGit(["worktree", "add", "-b", branch, path, p2Env.TARGET_REPO_BASE_BRANCH]);
   return { path, branch };
 }
 

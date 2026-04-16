@@ -47,6 +47,8 @@ describe("invokeCodex", () => {
     process.env.CODEX_BIN = "/usr/local/bin/codex";
     process.env.INNGEST_EVENT_KEY = "x";
     process.env.INNGEST_SIGNING_KEY = "x";
+    process.env.GITHUB_WEBHOOK_SECRET = "gh-secret";
+    process.env.CHROME_PATH = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
   });
   afterEach(() => {
     process.env = originalEnv;
@@ -103,6 +105,27 @@ describe("invokeCodex", () => {
     const result = await invokeCodex("hello");
     expect(result.stdout).toBe("ok-output");
     expect(result.exitCode).toBe(0);
+  });
+
+  it("forwards stdout and stderr to chunk callbacks", async () => {
+    const onStdoutChunk = vi.fn();
+    const onStderrChunk = vi.fn();
+    spawnMock.mockReturnValue(
+      fakeProc({
+        stdout: "first line\nsecond line without newline",
+        stderr: "warn line\n",
+        exitCode: 0,
+      }),
+    );
+
+    await invokeCodex("hello", {
+      onStdoutChunk,
+      onStderrChunk,
+    });
+
+    expect(onStdoutChunk).toHaveBeenCalledWith("first line");
+    expect(onStdoutChunk).toHaveBeenCalledWith("second line without newline");
+    expect(onStderrChunk).toHaveBeenCalledWith("warn line");
   });
 
   it("rejects with stderr on non-zero exit", async () => {

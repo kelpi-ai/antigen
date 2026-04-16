@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Hono } from "hono";
-import { env } from "../config/env";
+import { p2Env } from "../config/env";
 import { inngest } from "../inngest/client";
 
 interface LinearWebhookData {
@@ -68,11 +68,11 @@ function normalizeNormalizedString(value: unknown): string {
 
 function verifyLinearSignature(body: string, signature: string): boolean {
   const normalizedSignature = signature.trim();
-  if (!normalizedSignature || !env.LINEAR_WEBHOOK_SECRET) {
+  if (!normalizedSignature || !p2Env.LINEAR_WEBHOOK_SECRET) {
     return false;
   }
 
-  const secret = env.LINEAR_WEBHOOK_SECRET;
+  const secret = p2Env.LINEAR_WEBHOOK_SECRET;
   const expectedSignature = createHmac("sha256", secret).update(body).digest("hex");
   const expected = Buffer.from(expectedSignature, "hex");
   const actual = Buffer.from(

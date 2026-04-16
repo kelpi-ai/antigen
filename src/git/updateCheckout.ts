@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { env } from "../config/env";
+import { p2Env } from "../config/env";
 
 interface GitResult {
   stdout: string;
@@ -10,7 +10,7 @@ function runGit(args: string[]): Promise<GitResult> {
   return new Promise((resolve, reject) => {
     const proc = spawn("git", args, {
       stdio: ["ignore", "pipe", "pipe"],
-      cwd: env.TARGET_REPO_PATH,
+      cwd: p2Env.TARGET_REPO_PATH,
     });
 
     let stdout = "";
@@ -46,11 +46,11 @@ export async function verifyCheckout(): Promise<void> {
 }
 
 export async function fetchCheckoutRemote(): Promise<void> {
-  await runGit(["fetch", env.TARGET_REPO_REMOTE]);
+  await runGit(["fetch", p2Env.TARGET_REPO_REMOTE]);
 }
 
 export async function pullCheckoutBaseBranch(): Promise<void> {
-  await runGit(["pull", "--ff-only", env.TARGET_REPO_REMOTE, env.TARGET_REPO_BASE_BRANCH]);
+  await runGit(["pull", "--ff-only", p2Env.TARGET_REPO_REMOTE, p2Env.TARGET_REPO_BASE_BRANCH]);
 }
 
 export async function updateCheckout(): Promise<void> {

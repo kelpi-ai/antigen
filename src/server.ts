@@ -6,10 +6,12 @@ import { inngest } from "./inngest/client";
 import { functions } from "./inngest";
 import { env } from "./config/env";
 import { mountLinearWebhook } from "./webhooks/linear";
+import { githubWebhookAdapter } from "./webhooks/github";
 
 export function buildApp(): Hono {
   const app = new Hono();
   app.get("/health", (c) => c.json({ ok: true }));
+  app.post("/webhooks/github", githubWebhookAdapter);
   app.on(
     ["GET", "POST", "PUT"],
     "/api/inngest",

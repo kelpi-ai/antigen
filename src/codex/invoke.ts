@@ -31,6 +31,8 @@ export interface InvokeOpts {
   model?: string;
   reasoningEffort?: string;
   observer?: InvokeObserver;
+  onStdoutChunk?: (chunk: string) => void;
+  onStderrChunk?: (chunk: string) => void;
 }
 
 export function invokeCodex(prompt: string, opts: InvokeOpts = {}): Promise<CodexResult> {
@@ -74,11 +76,10 @@ export function invokeCodex(prompt: string, opts: InvokeOpts = {}): Promise<Code
     let proc;
 
     try {
-      proc = spawn(
-        codexBin,
-        args,
-        { stdio: ["ignore", "pipe", "pipe"], cwd: opts.cwd },
-      );
+      proc = spawn(codexBin, args, {
+        stdio: ["ignore", "pipe", "pipe"],
+        cwd: opts.cwd,
+      });
     } catch (error) {
       reject(error);
       return;
@@ -88,16 +89,21 @@ export function invokeCodex(prompt: string, opts: InvokeOpts = {}): Promise<Code
 
     let stdout = "";
     let stderr = "";
+    const forwardStdout = createChunkForwarder(opts.onStdoutChunk);
+    const forwardStderr = createChunkForwarder(opts.onStderrChunk);
+
     proc.stdout?.on("data", (c: Buffer) => {
       const chunk = c.toString();
       stdout += chunk;
       safeObserver.onStdout(chunk);
+      forwardStdout.push(chunk);
     });
 
     proc.stderr?.on("data", (c: Buffer) => {
       const chunk = c.toString();
       stderr += chunk;
       safeObserver.onStderr(chunk);
+      forwardStderr.push(chunk);
     });
 
     const timeout = opts.timeoutMs
@@ -109,6 +115,8 @@ export function invokeCodex(prompt: string, opts: InvokeOpts = {}): Promise<Code
 
     proc.on("close", (code) => {
       if (timeout) clearTimeout(timeout);
+      forwardStdout.flush();
+      forwardStderr.flush();
       safeObserver.onExit({ exitCode: code });
 
       if (code === 0) {
@@ -123,4 +131,44 @@ export function invokeCodex(prompt: string, opts: InvokeOpts = {}): Promise<Code
       reject(err);
     });
   });
+}
+
+function createChunkForwarder(
+  onChunk?: (chunk: string) => void,
+): { push: (chunk: string) => void; flush: () => void } {
+  let pending = "";
+
+  return {
+    push(chunk: string) {
+      if (!onChunk) {
+        return;
+      }
+
+      pending += chunk;
+
+      while (true) {
+        const newlineIndex = pending.indexOf("\n");
+        if (newlineIndex === -1) {
+          break;
+        }
+
+        const line = pending.slice(0, newlineIndex).replace(/\r$/, "");
+        pending = pending.slice(newlineIndex + 1);
+        if (line.length > 0) {
+          onChunk(line);
+        }
+      }
+    },
+    flush() {
+      if (!onChunk || pending.length === 0) {
+        return;
+      }
+
+      const remainder = pending.replace(/\r$/, "");
+      pending = "";
+      if (remainder.length > 0) {
+        onChunk(remainder);
+      }
+    },
+  };
 }
