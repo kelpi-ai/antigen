@@ -4,3 +4,5 @@ dist
 .env.local
 *.log
 .DS_Store
+2026-04-15-incident-loop-plan.pdf
+.worktrees/
