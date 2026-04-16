@@ -6,7 +6,7 @@
 
 ## Summary
 
-P2 turns a Linear bug ticket into a draft fix PR. The Linear webhook is only an external adapter and trigger. The durable fixer flow runs in Inngest, creates an isolated git worktree for the target repository, fetches the latest ticket context through Linear MCP, writes a regression test first, proves red, applies the minimal fix, proves green, and opens a draft PR containing both the test and the fix.
+P2 turns a Linear bug ticket into a draft fix PR. The Linear webhook is only an external adapter and trigger. The durable fixer flow runs in Inngest, creates an isolated git worktree for the target repository, fetches the latest ticket context through Linear MCP, writes a regression test first, proves red, applies the minimal fix, proves green, optionally verifies browser-visible fixes through Chrome MCP, and opens a draft PR containing both the test and the fix.
 
 The regression test is the durable knowledge base for future bug prevention. The Linear ticket is the transient incident record that may contain reproduction steps, expected versus actual behavior, environment details, replay links, error signatures, and references to previous similar issues.
 
@@ -17,6 +17,7 @@ The regression test is the durable knowledge base for future bug prevention. The
 - Enforce TDD as a hard invariant: regression test first, then fix.
 - Keep concurrent fixer runs isolated and conflict-aware.
 - Produce a draft PR that contains the regression test and the minimal code fix.
+- Add optional browser-level verification for user-visible fixes.
 - Preserve the regression suite as the long-term knowledge base for preventing repeated bugs.
 
 ## Non-Goals
@@ -125,6 +126,7 @@ Responsibilities:
 - turn ticket context plus worktree metadata into one deterministic fixer prompt
 - encode the red-green contract
 - direct the regression test into `tests/regressions/`
+- require optional Chrome MCP verification when the bug is browser-visible
 - require a draft PR
 - require machine-parsable completion output
 
@@ -165,7 +167,8 @@ The fixer must follow this order:
 4. If the repro is unclear or the failure is not trustworthy, switch into the `systematic-debugging` skill workflow.
 5. Write the minimal fix.
 6. Run the regression test again and observe a real pass.
-7. Open a draft PR containing the regression test and the fix.
+7. If the bug is meaningfully browser-visible, verify the fixed flow with Chrome MCP and capture concise evidence.
+8. Open a draft PR containing the regression test and the fix.
 
 The orchestrator must not treat the run as successful unless it receives machine-parsable proof of:
 
@@ -174,6 +177,8 @@ The orchestrator must not treat the run as successful unless it receives machine
 - the draft PR URL
 
 A draft PR URL alone is insufficient.
+
+Chrome MCP verification is supportive evidence, not the primary success gate. P2 should use it when the bug is user-visible in the browser and the verification adds confidence for reviewers. P2 should not fail an otherwise valid backend or non-UI fix merely because Chrome MCP is not applicable.
 
 ## Knowledge Base Rule
 
@@ -202,12 +207,13 @@ The minimum completion payload must contain:
   testPath: string;
   redEvidence: string;
   greenEvidence: string;
+  chromeEvidence?: string;
 }
 ```
 
 If any required field is missing, the run is treated as failed.
 
-The draft PR body should also include the same red and green evidence so reviewers can audit the TDD claim without inspecting raw orchestration logs.
+The draft PR body should also include the same red and green evidence so reviewers can audit the TDD claim without inspecting raw orchestration logs. When Chrome MCP verification runs, the PR body should include a short summary of what was verified and any linked screenshot or artifact.
 
 ## Failure Handling
 
@@ -218,6 +224,7 @@ The draft PR body should also include the same red and green evidence so reviewe
 - Worktree creation failure: fail the run.
 - Codex failure after worktree creation: remove the worktree in `finally`, then fail the run.
 - Missing structured completion payload or missing red-green proof: fail the run even if a PR exists.
+- Chrome MCP verification failure on a browser-visible bug should fail the run only if the fixer explicitly claimed that browser verification was applicable and required for this bug.
 
 ## Testing Strategy
 
@@ -227,6 +234,7 @@ The draft PR body should also include the same red and green evidence so reviewe
 - worktree tests for create, remove, and git failure handling
 - prompt contract tests for red-green requirements, draft PR requirement, test destination, and structured completion format
 - orchestrator tests for sequence, cleanup, concurrency configuration, Linear MCP fetch behavior, and failure handling
+- prompt and orchestrator tests for optional Chrome MCP verification behavior on browser-visible fixes
 
 ### Manual validation
 
@@ -238,6 +246,7 @@ P2 must be manually testable before P1 exists:
 - confirm the function fetches live ticket data via Linear MCP
 - confirm a worktree is created and later removed
 - confirm success only when red-green evidence and a draft PR URL are returned
+- for a browser-visible bug, confirm Chrome MCP can demonstrate the fixed behavior and include that evidence in the draft PR
 
 ## Integration With P1
 
@@ -261,4 +270,5 @@ P2 remains unchanged because it already consumes live ticket context through Lin
 - Missing `module:*` labels fall back to `unknown`.
 - Worktrees are always cleaned up.
 - Success requires explicit red-green evidence and a draft PR URL.
+- Browser-visible bugs can add Chrome MCP verification evidence without replacing the regression test as the main proof.
 - The committed regression test is treated as the durable knowledge base for future bug prevention.
