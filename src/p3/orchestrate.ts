@@ -135,8 +135,8 @@ export async function runPrHunter({
   let runMetadataPath: string | null = null;
   let runPhase = "planner";
   let runPreviewUrl: string | null = null;
-  let plannerResult: PlannerResult | null = null;
   let plannerScenarios: HuntScenario[] = [];
+  let plannerResult: PlannerResult | null = null;
   let selectedScenarios: HuntScenario[] = [];
   let executorResults: ExecutorResult[] = [];
 
@@ -183,17 +183,28 @@ export async function runPrHunter({
     }
 
     runPhase = "executor-selection";
-    selectedScenarios = selectTopScenarios(
-      plannerResult.scenarios,
+    const topScenarios = selectTopScenarios(
+      plannerScenarios,
       env.MAX_SCENARIOS_PER_PR,
-    ).map((scenario) => ensureExecutableScenario(scenario));
+    );
+    selectedScenarios = [...topScenarios];
 
+    runPhase = "executor-validation";
+    const executableScenarios = topScenarios.map((scenario) =>
+      ensureExecutableScenario(scenario),
+    );
+    executorResults = [];
     runPhase = "executor";
-    executorResults = await runWithConcurrencyLimit(
-      selectedScenarios,
+    const runExecutor = async (scenario: HuntScenario) => {
+      const result = await runWithScenario(run.runDir, event, previewUrl, scenario, step);
+      executorResults.push(result);
+      return result;
+    };
+
+    await runWithConcurrencyLimit(
+      executableScenarios,
       env.P3_EXECUTOR_CONCURRENCY,
-      (scenario) =>
-        runWithScenario(run.runDir, event, previewUrl, scenario, step),
+      runExecutor,
     );
 
     runPhase = "reducer";
@@ -203,7 +214,7 @@ export async function runPrHunter({
       event,
       previewUrl,
       plannerResult.scenarios,
-      selectedScenarios,
+      executableScenarios,
       executorResults,
       step,
     );

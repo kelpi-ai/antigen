@@ -227,6 +227,78 @@ describe("runPrHunter", () => {
     );
   });
 
+  it("preserves selected scenario metadata when validation fails", async () => {
+    vi.mocked(invokeCodex).mockResolvedValueOnce({
+      stdout:
+        'P3_PLANNER_JSON {"previewUrl":"https://preview.example","scenarios":[{"id":"mutating-missing","summary":"danger path","rationale":"risk","targetArea":"checkout","risk":"high","mode":"mutating","guardrails":[],"expectedEvidence":["consoleSignals"]},{"id":"read-safe","summary":"safe path","rationale":"risk","targetArea":"account","risk":"medium","mode":"read_safe","guardrails":[],"expectedEvidence":["networkSignals"]}]}',
+      stderr: "",
+      exitCode: 0,
+    });
+
+    await expect(runPrHunter({ event: readyEvent, step })).rejects.toThrow(/Mutating scenario mutating-missing is missing guardrails/);
+    expect(updateHuntRunMetadata).toHaveBeenCalledWith(
+      "/tmp/run-123/metadata.json",
+      expect.objectContaining({
+        status: "failed",
+        failurePhase: "executor-validation",
+        failureReason: expect.stringContaining("mutating-missing"),
+        totalScenarioCount: 2,
+        selectedScenarioCount: 2,
+        selectedScenarioIds: ["mutating-missing", "read-safe"],
+      }),
+    );
+  });
+
+  it("records partial executor progress when later executor fails", async () => {
+    process.env.P3_EXECUTOR_CONCURRENCY = "1";
+
+    vi.mocked(launchChromeSession).mockResolvedValue({
+      process: { kill: vi.fn() } as unknown as ChildProcess,
+      debuggingPort: 9333,
+      wsEndpoint: "ws://127.0.0.1:9333/devtools/browser/test",
+    });
+
+    vi.mocked(createScenarioWorkspace).mockResolvedValue({
+      scenarioDir: "/tmp/run-123/scenarios/first",
+      codexDir: "/tmp/run-123/scenarios/first/.codex",
+      profileDir: "/tmp/run-123/scenarios/first/profile",
+      screenshotPath: "/tmp/run-123/scenarios/first/failure.png",
+    });
+
+    vi.mocked(invokeCodex)
+      .mockResolvedValueOnce({
+        stdout:
+          'P3_PLANNER_JSON {"previewUrl":"https://preview.example","scenarios":[{"id":"first","summary":"first scenario","rationale":"risk","targetArea":"checkout","risk":"high","mode":"read_safe","guardrails":[],"expectedEvidence":["consoleSignals"]},{"id":"second","summary":"second scenario","rationale":"risk","targetArea":"account","risk":"medium","mode":"read_safe","guardrails":[],"expectedEvidence":["networkSignals"]}]}',
+        stderr: "",
+        exitCode: 0,
+      })
+      .mockResolvedValueOnce({
+        stdout:
+          'P3_EXECUTOR_JSON {"scenarioId":"first","outcome":"failed","summary":"failed check","consoleSignals":["oops"],"networkSignals":[],"evidence":["TypeError"],"screenshotPath":"/tmp/run-123/scenarios/first/failure.png"}',
+        stderr: "",
+        exitCode: 0,
+      })
+      .mockResolvedValueOnce({
+        stdout: "not-json-output",
+        stderr: "",
+        exitCode: 0,
+      });
+
+    await expect(runPrHunter({ event: readyEvent, step })).rejects.toThrow(/P3_EXECUTOR_JSON/);
+    expect(updateHuntRunMetadata).toHaveBeenCalledWith(
+      "/tmp/run-123/metadata.json",
+      expect.objectContaining({
+        status: "failed",
+        failurePhase: "executor",
+        executorResultCount: 1,
+        credibleFailureCount: 1,
+        totalScenarioCount: 2,
+        selectedScenarioCount: 2,
+        selectedScenarioIds: ["first", "second"],
+      }),
+    );
+  });
+
   it("does not mask executor parse errors when Chrome cleanup throws", async () => {
     const kill = vi.fn(() => {
       throw new Error("cleanup failed");
