@@ -99,6 +99,24 @@ describe("githubWebhookAdapter", () => {
     expect(inngest.send).not.toHaveBeenCalled();
   });
 
+  it("returns 400 for invalid JSON payloads", async () => {
+    const app = new Hono();
+    app.post("/webhooks/github", githubWebhookAdapter);
+
+    const body = "{ this is not valid JSON }";
+    const res = await app.request("/webhooks/github", {
+      method: "POST",
+      headers: {
+        "x-github-event": "pull_request",
+        "x-hub-signature-256": sign(body, "test-secret"),
+      },
+      body,
+    });
+
+    expect(res.status).toBe(400);
+    expect(inngest.send).not.toHaveBeenCalled();
+  });
+
   it("returns 401 for invalid signature", async () => {
     const app = new Hono();
     app.post("/webhooks/github", githubWebhookAdapter);
@@ -128,5 +146,68 @@ describe("githubWebhookAdapter", () => {
 
     expect(res.status).toBe(401);
     expect(inngest.send).not.toHaveBeenCalled();
+  });
+
+  it("returns 204 when event is not pull_request", async () => {
+    const app = new Hono();
+    app.post("/webhooks/github", githubWebhookAdapter);
+
+    const payload = {
+      action: "ready_for_review",
+      number: 123,
+      pull_request: {
+        html_url: "https://github.com/octocat/hello-world/pull/123",
+        head: { sha: "head-sha" },
+        base: { sha: "base-sha" },
+      },
+      repository: {
+        full_name: "octocat/hello-world",
+      },
+    };
+    const body = JSON.stringify(payload);
+
+    const res = await app.request("/webhooks/github", {
+      method: "POST",
+      headers: {
+        "x-github-event": "issues",
+        "x-hub-signature-256": sign(body, "test-secret"),
+      },
+      body,
+    });
+
+    expect(res.status).toBe(204);
+    expect(inngest.send).not.toHaveBeenCalled();
+  });
+
+  it("returns 502 when event dispatch fails", async () => {
+    vi.mocked(inngest.send).mockRejectedValueOnce(new Error("dispatch failed"));
+    const app = new Hono();
+    app.post("/webhooks/github", githubWebhookAdapter);
+
+    const payload = {
+      action: "ready_for_review",
+      number: 123,
+      pull_request: {
+        html_url: "https://github.com/octocat/hello-world/pull/123",
+        head: { sha: "head-sha" },
+        base: { sha: "base-sha" },
+      },
+      repository: {
+        full_name: "octocat/hello-world",
+      },
+    };
+    const body = JSON.stringify(payload);
+
+    const res = await app.request("/webhooks/github", {
+      method: "POST",
+      headers: {
+        "x-github-event": "pull_request",
+        "x-hub-signature-256": sign(body, "test-secret"),
+      },
+      body,
+    });
+
+    expect(res.status).toBe(502);
+    expect(inngest.send).toHaveBeenCalledTimes(1);
   });
 });

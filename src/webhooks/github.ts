@@ -72,17 +72,21 @@ export async function githubWebhookAdapter(c: Context): Promise<Response> {
     return c.body(null, { status: 204 });
   }
 
-  await inngest.send({
-    name: "github/pr.ready_for_review",
-    data: {
-      prNumber: payload.number,
-      repo: payload.repository.full_name,
-      prUrl: payload.pull_request.html_url,
-      headSha: payload.pull_request.head.sha,
-      baseSha: payload.pull_request.base.sha,
-    },
-  });
+  try {
+    await inngest.send({
+      name: "github/pr.ready_for_review",
+      data: {
+        prNumber: payload.number,
+        repo: payload.repository.full_name,
+        prUrl: payload.pull_request.html_url,
+        headSha: payload.pull_request.head.sha,
+        baseSha: payload.pull_request.base.sha,
+      },
+    });
+  } catch (error) {
+    console.error("failed to dispatch github webhook event", error);
+    return c.text("failed to dispatch event", { status: 502 });
+  }
 
   return c.body(null, { status: 202 });
 }
-
