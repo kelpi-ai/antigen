@@ -55,7 +55,7 @@ function slugify(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
-export async function runCodexTask(input: {
+export async function runStructuredCodexTask(input: {
   prompt: string;
   cwd?: string;
   observer?: FixerObserver;
@@ -106,6 +106,22 @@ export async function runCodexTask(input: {
 
     throw error;
   }
+}
+
+export function runCodexTask(prompt: string, cwd?: string): Promise<string>;
+export function runCodexTask(
+  input: { prompt: string; cwd?: string; observer?: FixerObserver },
+): Promise<CodexTaskOutput>;
+export async function runCodexTask(
+  inputOrPrompt: string | { prompt: string; cwd?: string; observer?: FixerObserver },
+  cwd?: string,
+): Promise<string | CodexTaskOutput> {
+  if (typeof inputOrPrompt === "string") {
+    const result = await runStructuredCodexTask({ prompt: inputOrPrompt, cwd });
+    return result.stdout;
+  }
+
+  return runStructuredCodexTask(inputOrPrompt);
 }
 
 export async function persistFixerTranscript(input: {
@@ -178,7 +194,7 @@ export function parseFixerResult(stdout: string): FixerResult {
 }
 
 export async function runFixer(input: { prompt: string; cwd: string }): Promise<FixerResult> {
-  const output = await runCodexTask({
+  const output = await runStructuredCodexTask({
     prompt: input.prompt,
     cwd: input.cwd,
   });

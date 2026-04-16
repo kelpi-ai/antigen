@@ -15,7 +15,13 @@ vi.mock("node:fs/promises", () => ({
   writeFile: (...args: unknown[]) => writeFileMock(...args),
 }));
 
-import { persistFixerTranscript, parseFixerResult, runCodexTask, runFixer } from "../../src/codex/fixer";
+import {
+  persistFixerTranscript,
+  parseFixerResult,
+  runCodexTask,
+  runFixer,
+  runStructuredCodexTask,
+} from "../../src/codex/fixer";
 
 describe("fixer", () => {
   const originalEnv = { ...process.env };
@@ -77,12 +83,21 @@ describe("fixer", () => {
   });
 
   describe("runCodexTask", () => {
+    it("returns stdout for legacy signature", async () => {
+      invokeCodexMock.mockResolvedValue({ stdout: "done", stderr: "", exitCode: 0 });
+
+      const response = await runCodexTask("fix this", "/tmp/repo");
+
+      expect(response).toBe("done");
+      expect(invokeCodexMock).toHaveBeenCalledWith("fix this", expect.objectContaining({ cwd: "/tmp/repo" }));
+    });
+
     it("passes cwd and configured model overrides to invokeCodex", async () => {
       process.env.CODEX_MODEL = "gpt-5.3-codex-spark";
       process.env.CODEX_REASONING_EFFORT = "medium";
       invokeCodexMock.mockResolvedValue({ stdout: "done", stderr: "", exitCode: 0 });
 
-      await runCodexTask({
+      await runStructuredCodexTask({
         prompt: "fix this",
         cwd: "/tmp/repo",
       });
@@ -106,7 +121,7 @@ describe("fixer", () => {
     it("omits model overrides when env is not set", async () => {
       invokeCodexMock.mockResolvedValue({ stdout: "done", stderr: "", exitCode: 0 });
 
-      await runCodexTask({
+      await runStructuredCodexTask({
         prompt: "fix this",
       });
 
@@ -140,7 +155,7 @@ describe("fixer", () => {
         };
       });
 
-      const output = await runCodexTask({
+      const output = await runStructuredCodexTask({
         prompt: "fix this",
         cwd: "/tmp/repo",
         observer: {
