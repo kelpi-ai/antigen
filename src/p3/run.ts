@@ -1,5 +1,5 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 
 export interface HuntRun {
@@ -46,7 +46,8 @@ export async function createScenarioWorkspace(input: {
   runDir: string;
   scenarioId: string;
 }): Promise<ScenarioWorkspace> {
-  const scenarioDir = join(input.runDir, "scenarios", input.scenarioId);
+  const safeScenarioId = sanitizeScenarioId(input.scenarioId);
+  const scenarioDir = join(input.runDir, "scenarios", safeScenarioId);
   const codexDir = join(scenarioDir, ".codex");
   const profileDir = join(scenarioDir, "profile");
   const screenshotPath = join(scenarioDir, "failure.png");
@@ -55,6 +56,31 @@ export async function createScenarioWorkspace(input: {
   await mkdir(profileDir, { recursive: true });
 
   return { scenarioDir, codexDir, profileDir, screenshotPath };
+}
+
+function sanitizeScenarioId(rawScenarioId: string): string {
+  const normalizedId = rawScenarioId.toLowerCase().trim();
+  const safeSlug = normalizedId
+    .replace(/[^a-z0-9._-]/g, "-")
+    .replace(/\.{2,}/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^[-.]+|[-.]+$/g, "")
+    .slice(0, 48);
+
+  const fingerprint = createHash("sha256")
+    .update(rawScenarioId)
+    .digest("hex")
+    .slice(0, 12);
+
+  if (!safeSlug) {
+    return `scenario-${fingerprint}`;
+  }
+
+  if (safeSlug === normalizedId) {
+    return safeSlug;
+  }
+
+  return `${safeSlug}-${fingerprint}`;
 }
 
 export async function updateHuntRunMetadata(

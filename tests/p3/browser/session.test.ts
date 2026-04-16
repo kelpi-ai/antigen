@@ -76,6 +76,28 @@ describe("launchChromeSession", () => {
     );
   });
 
+  it("kills chrome process if websocket endpoint resolution fails", async () => {
+    const kill = vi.fn();
+    const proc = new EventEmitter() as ChildProcess;
+    (proc as ChildProcess & { kill: () => void }).kill = kill;
+    spawnMock.mockReturnValue(proc);
+
+    const fetchMock = vi.fn().mockRejectedValue(new Error("offline"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sessionPromise = launchChromeSession({
+      chromePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      userDataDir: "/tmp/run-profile",
+      debuggingPort: 9333,
+    });
+
+    await expect(sessionPromise).rejects.toThrow(
+      "Chrome DevTools endpoint did not appear on port 9333",
+    );
+    expect(kill).toHaveBeenCalledTimes(1);
+    expect(spawnMock).toHaveBeenCalledOnce();
+  });
+
   it("resolveWsEndpoint retries on fetch errors before succeeding", async () => {
     const fetchMock = vi
       .fn()

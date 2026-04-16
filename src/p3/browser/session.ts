@@ -67,10 +67,19 @@ export async function launchChromeSession(input: {
     { stdio: ["ignore", "pipe", "pipe"] },
   );
 
-  const wsEndpoint = await resolveWsEndpoint(debuggingPort);
-  return {
-    process,
-    debuggingPort,
-    wsEndpoint,
-  };
+  try {
+    const wsEndpoint = await resolveWsEndpoint(debuggingPort);
+    return {
+      process,
+      debuggingPort,
+      wsEndpoint,
+    };
+  } catch (error) {
+    try {
+      process.kill();
+    } catch {
+      // Preserve the original bootstrap error.
+    }
+    throw error;
+  }
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { mkdtemp, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { join, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import {
   createHuntRun,
@@ -44,6 +44,29 @@ describe("createScenarioWorkspace", () => {
     expect(workspace.scenarioDir).toContain("checkout-coupon");
     expect(workspace.codexDir.endsWith(".codex")).toBe(true);
     expect(workspace.profileDir.endsWith("profile")).toBe(true);
+  });
+
+  it("sanitizes hostile scenario IDs so workspace stays under runDir", async () => {
+    const root = await mkdtemp(join(tmpdir(), "incident-loop-p3-"));
+    const run = await createHuntRun({
+      artifactsRoot: root,
+      prNumber: 11,
+      repo: "acme/app",
+    });
+
+    const workspace = await createScenarioWorkspace({
+      runDir: run.runDir,
+      scenarioId: "../../escape",
+    });
+
+    const absoluteScenarioDir = resolve(workspace.scenarioDir);
+    const absoluteRunDir = resolve(run.runDir);
+    expect(absoluteScenarioDir.startsWith(`${absoluteRunDir}${sep}`)).toBe(true);
+    expect(workspace.codexDir.startsWith(run.runDir)).toBe(true);
+    expect(workspace.profileDir.startsWith(run.runDir)).toBe(true);
+    expect((await stat(workspace.scenarioDir)).isDirectory()).toBe(true);
+    expect((await stat(workspace.codexDir)).isDirectory()).toBe(true);
+    expect((await stat(workspace.profileDir)).isDirectory()).toBe(true);
   });
 });
 
