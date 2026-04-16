@@ -7,7 +7,7 @@ export interface ChromeSession {
   wsEndpoint: string;
 }
 
-async function getAvailablePort(): Promise<number> {
+export async function getAvailablePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = createServer();
     server.listen(0, "127.0.0.1", () => {
@@ -28,16 +28,20 @@ async function getAvailablePort(): Promise<number> {
   });
 }
 
-async function resolveWsEndpoint(port: number): Promise<string> {
+export async function resolveWsEndpoint(port: number): Promise<string> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    const response = await fetch(`http://127.0.0.1:${port}/json/version`);
-    if (response.ok) {
-      const payload = (await response.json()) as {
-        webSocketDebuggerUrl?: string;
-      };
-      if (payload.webSocketDebuggerUrl) {
-        return payload.webSocketDebuggerUrl;
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/json/version`);
+      if (response.ok) {
+        const payload = (await response.json()) as {
+          webSocketDebuggerUrl?: string;
+        };
+        if (payload.webSocketDebuggerUrl) {
+          return payload.webSocketDebuggerUrl;
+        }
       }
+    } catch {
+      // Ignore transient startup failures while waiting for Chrome to expose DevTools.
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
