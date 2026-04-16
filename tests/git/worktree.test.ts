@@ -97,4 +97,13 @@ describe("worktree helpers", () => {
 
     await expect(createWorktree("BUG-42")).rejects.toThrow(/git worktree add.*invalid reference/);
   });
+
+  it("wraps spawn failures with command context", async () => {
+    const spawnError = new Error("spawn failed");
+    spawnMock.mockImplementationOnce(() => {
+      throw spawnError;
+    });
+
+    await expect(createWorktree("BUG-42")).rejects.toThrow(/git worktree add -b fix\/BUG-42-[0-9a-f]{8} .*spawn failed/);
+  });
 });

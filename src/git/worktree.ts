@@ -11,10 +11,19 @@ interface GitResult {
 
 function runGit(args: string[]): Promise<GitResult> {
   return new Promise((resolve, reject) => {
-    const proc = spawn("git", args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      cwd: env.TARGET_REPO_PATH,
-    });
+    const command = `git ${args.join(" ")}`;
+
+    let proc: ReturnType<typeof spawn>;
+    try {
+      proc = spawn("git", args, {
+        stdio: ["ignore", "pipe", "pipe"],
+        cwd: env.TARGET_REPO_PATH,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      reject(new Error(`${command} failed: ${message}`));
+      return;
+    }
 
     let stdout = "";
     let stderr = "";
@@ -27,16 +36,15 @@ function runGit(args: string[]): Promise<GitResult> {
     });
 
     proc.on("error", (error) => {
-      reject(error);
+      const message = error instanceof Error ? error.message : String(error);
+      reject(new Error(`${command} failed: ${message}`));
     });
 
     proc.on("close", (code) => {
       if (code === 0) {
         resolve({ stdout, stderr });
       } else {
-        reject(
-          new Error(`git ${args.join(" ")} failed: ${stderr.trim() || "no stderr"}`),
-        );
+        reject(new Error(`${command} failed: ${stderr.trim() || "no stderr"}`));
       }
     });
   });
