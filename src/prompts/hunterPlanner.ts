@@ -20,10 +20,15 @@ A pull request is ready for review:
 Your job is to:
 1. Use GitHub MCP to fetch PR metadata, changed files, unified diff, and deployment information.
 2. Resolve the preview URL from GitHub if one exists.
-3. Use Sentry MCP to pull recent or recurring incidents related to the changed areas.
-4. Use Linear MCP to pull open or recent bug history related to the changed areas.
+3. Use Sentry MCP to pull recent or recurring incidents related to the changed areas if available.
+4. Use Linear MCP to pull open or recent bug history related to the changed areas if available.
 5. Correlate the diff and the incident history.
 6. Produce exactly ${input.maxScenarios} ranked scenarios for executor runs.
+
+Dependency rule:
+- GitHub MCP is required.
+- Sentry MCP and Linear MCP are optional context only.
+- If Sentry MCP or Linear MCP is unavailable, unauthenticated, or returns handshake errors, skip them quietly and continue with GitHub-only evidence.
 
 Progressive repo context rule:
 - Start with PR metadata, changed files, unified diff, and deployment information.

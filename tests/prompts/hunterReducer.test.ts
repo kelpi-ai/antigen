@@ -30,6 +30,11 @@ describe("buildHunterReducerPrompt", () => {
     expect(prompt).not.toMatch(/draft PR/i);
   });
 
+  it("requires a PR comment even when there are no actionable suggestions", () => {
+    expect(prompt).toMatch(/no actionable suggestions/i);
+    expect(prompt).toMatch(/no suggestions were found/i);
+  });
+
   it("requires tagged JSON output", () => {
     expect(prompt).toContain("P3_REDUCER_JSON");
   });

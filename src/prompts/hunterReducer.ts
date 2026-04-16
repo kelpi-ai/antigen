@@ -28,6 +28,8 @@ Reducer rules:
 - Do not create draft pull requests.
 - Do not enter the fixer flow.
 - Treat uncertain results as advisory notes in the PR comment, not investigation tickets.
+- If there are no actionable suggestions or no executor results, still post a short PR comment saying no suggestions were found and why.
+- Treat Linear as optional: if ticket creation is unavailable, do not fail the run for that reason.
 
 Output exactly one line in this format:
 P3_REDUCER_JSON {"status":"clean|failures|partial|skipped","prComment":"...","investigationTickets":[{"action":"create|update","title":"...","body":"..."}]}

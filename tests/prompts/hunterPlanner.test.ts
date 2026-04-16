@@ -13,10 +13,12 @@ describe("buildHunterPlannerPrompt", () => {
     maxScenarios: 5,
   });
 
-  it("mentions GitHub, Sentry, and Linear MCP", () => {
+  it("requires GitHub MCP and treats Sentry and Linear as optional signals", () => {
     expect(prompt).toMatch(/GitHub MCP/i);
     expect(prompt).toMatch(/Sentry MCP/i);
     expect(prompt).toMatch(/Linear MCP/i);
+    expect(prompt).toMatch(/if available/i);
+    expect(prompt).toMatch(/skip them quietly/i);
   });
 
   it("requires progressive repo context instead of whole-repo loading", () => {
