@@ -3,7 +3,13 @@ import { z } from "zod";
 const EnvSchema = z.object({
   INNGEST_EVENT_KEY: z.string().min(1),
   INNGEST_SIGNING_KEY: z.string().min(1),
-  CODEX_BIN: z.string().min(1),
+  OPENAI_API_KEY: z.string().min(1),
+  TARGET_APP_URL: z.string().url(),
+  SENTRY_WEBHOOK_SECRET: z.string().min(1),
+  LINEAR_API_KEY: z.string().min(1),
+  ARTIFACTS_DIR: z.string().min(1).default(".incident-loop-artifacts"),
+  CHROME_PATH: z.string().min(1).optional(),
+  FFMPEG_BIN: z.string().min(1).optional(),
   PORT: z.coerce.number().int().positive().default(3000),
 });
 
