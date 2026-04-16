@@ -51,12 +51,12 @@ describe("loadEnv", () => {
     process.env.LINEAR_WEBHOOK_SECRET = "linear-webhook-secret";
     process.env.TARGET_REPO_PATH = "/tmp/target-repo";
     process.env.TARGET_REPO_WORKTREE_ROOT = "/tmp/worktrees";
-    process.env.ARTIFACTS_DIR = undefined;
-    process.env.CHROME_PATH = undefined;
-    process.env.FFMPEG_BIN = undefined;
-    process.env.PORT = undefined;
-    process.env.TARGET_REPO_REMOTE = undefined;
-    process.env.TARGET_REPO_BASE_BRANCH = undefined;
+    delete process.env.ARTIFACTS_DIR;
+    delete process.env.CHROME_PATH;
+    delete process.env.FFMPEG_BIN;
+    delete process.env.PORT;
+    delete process.env.TARGET_REPO_REMOTE;
+    delete process.env.TARGET_REPO_BASE_BRANCH;
 
     const env = loadEnv();
     expect(env.TARGET_REPO_REMOTE).toBe("origin");
