@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { env } from "../config/env";
 
 export interface CodexResult {
   stdout: string;
@@ -7,23 +6,99 @@ export interface CodexResult {
   exitCode: number;
 }
 
+export class CodexExecutionError extends Error {
+  constructor(
+    readonly exitCode: number | null,
+    readonly stdout: string,
+    readonly stderr: string,
+  ) {
+    const renderedExitCode = exitCode === null ? "null" : String(exitCode);
+    super(`codex exited ${renderedExitCode}: ${stderr.trim() || "no stderr"}`);
+    this.name = "CodexExecutionError";
+  }
+}
+
+export interface InvokeObserver {
+  onStart?(meta: { command: string; args: string[]; cwd?: string }): void;
+  onStdout?(chunk: string): void;
+  onStderr?(chunk: string): void;
+  onExit?(meta: { exitCode: number | null }): void;
+}
+
 export interface InvokeOpts {
   cwd?: string;
   timeoutMs?: number;
+  model?: string;
+  reasoningEffort?: string;
+  observer?: InvokeObserver;
 }
 
 export function invokeCodex(prompt: string, opts: InvokeOpts = {}): Promise<CodexResult> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(
-      env.CODEX_BIN,
-      ["exec", "--full-auto", prompt],
-      { stdio: ["ignore", "pipe", "pipe"], cwd: opts.cwd },
-    );
+    const codexBin = process.env.CODEX_BIN || "codex";
+    const args = ["exec", "--full-auto"];
+
+    if (opts.model) {
+      args.push("--model", opts.model);
+    }
+
+    if (opts.reasoningEffort) {
+      args.push("-c", `model_reasoning_effort="${opts.reasoningEffort}"`);
+    }
+
+    args.push(prompt);
+
+    const safeObserver = {
+      onStart(meta: { command: string; args: string[]; cwd?: string }): void {
+        try {
+          opts.observer?.onStart?.(meta);
+        } catch {}
+      },
+      onStdout(chunk: string): void {
+        try {
+          opts.observer?.onStdout?.(chunk);
+        } catch {}
+      },
+      onStderr(chunk: string): void {
+        try {
+          opts.observer?.onStderr?.(chunk);
+        } catch {}
+      },
+      onExit(meta: { exitCode: number | null }): void {
+        try {
+          opts.observer?.onExit?.(meta);
+        } catch {}
+      },
+    };
+
+    let proc;
+
+    try {
+      proc = spawn(
+        codexBin,
+        args,
+        { stdio: ["ignore", "pipe", "pipe"], cwd: opts.cwd },
+      );
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
+    safeObserver.onStart({ command: codexBin, args, cwd: opts.cwd });
 
     let stdout = "";
     let stderr = "";
-    proc.stdout?.on("data", (c: Buffer) => { stdout += c.toString(); });
-    proc.stderr?.on("data", (c: Buffer) => { stderr += c.toString(); });
+    proc.stdout?.on("data", (c: Buffer) => {
+      const chunk = c.toString();
+      stdout += chunk;
+      safeObserver.onStdout(chunk);
+    });
+
+    proc.stderr?.on("data", (c: Buffer) => {
+      const chunk = c.toString();
+      stderr += chunk;
+      safeObserver.onStderr(chunk);
+    });
 
     const timeout = opts.timeoutMs
       ? setTimeout(() => {
@@ -34,11 +109,12 @@ export function invokeCodex(prompt: string, opts: InvokeOpts = {}): Promise<Code
 
     proc.on("close", (code) => {
       if (timeout) clearTimeout(timeout);
+      safeObserver.onExit({ exitCode: code });
+
       if (code === 0) {
         resolve({ stdout, stderr, exitCode: 0 });
       } else {
-        const exitCode = code === null ? "null" : code;
-        reject(new Error(`codex exited ${exitCode}: ${stderr.trim() || "no stderr"}`));
+        reject(new CodexExecutionError(code, stdout, stderr));
       }
     });
 
