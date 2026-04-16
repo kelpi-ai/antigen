@@ -73,7 +73,11 @@ async function runWithScenario(
 
     return extractTaggedJson<ExecutorResult>(result.stdout, "P3_EXECUTOR_JSON");
   } finally {
-    session.process.kill();
+    try {
+      session.process.kill();
+    } catch {
+      // Preserve original execution failure details.
+    }
   }
 }
 
@@ -132,6 +136,9 @@ export async function runPrHunter({
   let runPhase = "planner";
   let runPreviewUrl: string | null = null;
   let plannerResult: PlannerResult | null = null;
+  let plannerScenarios: HuntScenario[] = [];
+  let selectedScenarios: HuntScenario[] = [];
+  let executorResults: ExecutorResult[] = [];
 
   try {
     const run = await runStep(step, "create-run", () =>
@@ -157,6 +164,7 @@ export async function runPrHunter({
       plannerOutput.stdout,
       "P3_PLANNER_JSON",
     );
+    plannerScenarios = plannerResult.scenarios;
     const previewUrl = plannerResult.previewUrl;
     runPreviewUrl = previewUrl;
 
@@ -175,13 +183,13 @@ export async function runPrHunter({
     }
 
     runPhase = "executor-selection";
-    const selectedScenarios = selectTopScenarios(
+    selectedScenarios = selectTopScenarios(
       plannerResult.scenarios,
       env.MAX_SCENARIOS_PER_PR,
     ).map((scenario) => ensureExecutableScenario(scenario));
 
     runPhase = "executor";
-    const executorResults = await runWithConcurrencyLimit(
+    executorResults = await runWithConcurrencyLimit(
       selectedScenarios,
       env.P3_EXECUTOR_CONCURRENCY,
       (scenario) =>
@@ -207,7 +215,11 @@ export async function runPrHunter({
           previewUrl: runPreviewUrl,
           failurePhase: runPhase,
           failureReason: error instanceof Error ? error.message : String(error),
-          plannerScenarioCount: plannerResult?.scenarios.length ?? 0,
+          totalScenarioCount: plannerScenarios.length,
+          selectedScenarioCount: selectedScenarios.length,
+          executorResultCount: executorResults.length,
+          credibleFailureCount: executorResults.filter(shouldCreateInvestigation).length,
+          selectedScenarioIds: selectedScenarios.map((scenario) => scenario.id),
           eventName: "github/pr.ready_for_review",
         }),
       ).catch(() => {});

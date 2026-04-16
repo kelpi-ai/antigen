@@ -219,7 +219,45 @@ describe("runPrHunter", () => {
         status: "failed",
         failurePhase: "executor",
         failureReason: expect.stringContaining("P3_EXECUTOR_JSON"),
+        totalScenarioCount: 1,
+        selectedScenarioCount: 1,
+        executorResultCount: 0,
+        selectedScenarioIds: ["checkout-coupon"],
       }),
     );
+  });
+
+  it("does not mask executor parse errors when Chrome cleanup throws", async () => {
+    const kill = vi.fn(() => {
+      throw new Error("cleanup failed");
+    });
+    vi.mocked(launchChromeSession).mockResolvedValue({
+      process: { kill } as unknown as ChildProcess,
+      debuggingPort: 9333,
+      wsEndpoint: "ws://127.0.0.1:9333/devtools/browser/test",
+    });
+
+    vi.mocked(createScenarioWorkspace).mockResolvedValue({
+      scenarioDir: "/tmp/run-123/scenarios/checkout-coupon",
+      codexDir: "/tmp/run-123/scenarios/checkout-coupon/.codex",
+      profileDir: "/tmp/run-123/scenarios/checkout-coupon/profile",
+      screenshotPath: "/tmp/run-123/scenarios/checkout-coupon/failure.png",
+    });
+
+    vi.mocked(invokeCodex)
+      .mockResolvedValueOnce({
+        stdout:
+          'P3_PLANNER_JSON {"previewUrl":"https://preview.example","scenarios":[{"id":"checkout-coupon","summary":"coupon flow","rationale":"risk","targetArea":"checkout","risk":"high","mode":"read_safe","guardrails":[],"expectedEvidence":["consoleSignals"]}]}',
+        stderr: "",
+        exitCode: 0,
+      })
+      .mockResolvedValueOnce({
+        stdout: "not-json-output",
+        stderr: "",
+        exitCode: 0,
+      });
+
+    await expect(runPrHunter({ event: readyEvent, step })).rejects.toThrow(/P3_EXECUTOR_JSON/);
+    expect(kill).toHaveBeenCalledTimes(1);
   });
 });
