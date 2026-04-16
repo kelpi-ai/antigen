@@ -67,6 +67,24 @@ describe("fetchTicketContext", () => {
     expect(ticketContext.module).toBe("billing");
   });
 
+  it("throws when required payload fields are missing or invalid", async () => {
+    const input = {
+      ticketId: "abc-4",
+      identifier: "ABC-4",
+      module: "checkout",
+      url: "https://linear.app/org/issue/ABC-4",
+    };
+
+    runCodexTaskMock.mockResolvedValue(
+      [
+        "LOG",
+        'LINEAR_TICKET_CONTEXT {"ticketId":"abc-4","identifier":"ABC-4","module":"checkout","url":"https://linear.app/org/issue/ABC-4","title":"", "body":"ok","browserVisible":"true","similarIssueContext":"none","environmentHints":{"browser":"Chromium","os":"Linux","viewport":"1280x720"}}',
+      ].join("\n"),
+    );
+
+    await expect(fetchTicketContext(input)).rejects.toThrow(/invalid LINEAR_TICKET_CONTEXT payload/);
+  });
+
   it("throws when LINEAR_TICKET_CONTEXT line is missing", async () => {
     const input = {
       ticketId: "abc-3",

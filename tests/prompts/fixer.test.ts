@@ -34,6 +34,11 @@ describe("buildFixerPrompt", () => {
     expect(prompt).toContain("GitHub MCP");
     expect(prompt).toContain("systematic-debugging");
     expect(prompt).toContain('FIXER_RESULT {"status":"ok","prUrl":');
+    expect(prompt).toContain('"status":"ok"');
+    expect(prompt).toContain('"testPath"');
+    expect(prompt).toContain('"redEvidence"');
+    expect(prompt).toContain('"greenEvidence"');
+    expect(prompt).toContain('"regressionGuardEvidence"');
   });
 
   it("contains target app URL, environment hints, and accessibility tree diff guidance", () => {

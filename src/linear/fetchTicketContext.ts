@@ -21,6 +21,63 @@ export interface TicketContext extends TicketSeed {
 
 const RESULT_PREFIX = "LINEAR_TICKET_CONTEXT ";
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === "string";
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function parseAndValidateTicketContext(payload: unknown): TicketContext {
+  if (!isObject(payload)) {
+    throw new Error("invalid LINEAR_TICKET_CONTEXT payload: expected JSON object");
+  }
+
+  const environmentHints = payload.environmentHints;
+  if (!isObject(environmentHints)) {
+    throw new Error("invalid LINEAR_TICKET_CONTEXT payload: missing environmentHints");
+  }
+
+  if (
+    !isNonEmptyString(payload.ticketId) ||
+    !isNonEmptyString(payload.identifier) ||
+    !isString(payload.module) ||
+    !isNonEmptyString(payload.url) ||
+    !isNonEmptyString(payload.title) ||
+    !isNonEmptyString(payload.body) ||
+    !isNonEmptyString(payload.similarIssueContext) ||
+    typeof payload.browserVisible !== "boolean" ||
+    !isNonEmptyString(environmentHints.browser) ||
+    !isNonEmptyString(environmentHints.os) ||
+    !isNonEmptyString(environmentHints.viewport)
+  ) {
+    throw new Error(
+      "invalid LINEAR_TICKET_CONTEXT payload: ticketId, identifier, url, title, body, similarIssueContext, browserVisible, environmentHints.browser, environmentHints.os, environmentHints.viewport must be present and valid; module must be a string",
+    );
+  }
+
+  return {
+    ticketId: payload.ticketId,
+    identifier: payload.identifier,
+    module: payload.module,
+    url: payload.url,
+    title: payload.title,
+    body: payload.body,
+    browserVisible: payload.browserVisible,
+    similarIssueContext: payload.similarIssueContext,
+    environmentHints: {
+      browser: environmentHints.browser,
+      os: environmentHints.os,
+      viewport: environmentHints.viewport,
+    },
+  };
+}
+
 export async function fetchTicketContext(input: TicketSeed): Promise<TicketContext> {
   const query = `
 Fetch Linear ticket context for ${input.identifier} (${input.url}).
@@ -37,10 +94,17 @@ Do not include any extra lines.
   }
 
   const payload = tagged.slice(RESULT_PREFIX.length);
-  const parsed = JSON.parse(payload) as TicketContext;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    throw new Error("invalid LINEAR_TICKET_CONTEXT payload JSON");
+  }
+
+  const validated = parseAndValidateTicketContext(parsed);
 
   return {
-    ...parsed,
-    module: parsed.module ? parsed.module : input.module,
+    ...validated,
+    module: validated.module || input.module,
   };
 }
