@@ -45,6 +45,30 @@ describe("invokeCodex", () => {
     );
   });
 
+  it("passes through an explicit model override", async () => {
+    spawnMock.mockReturnValue(fakeProc({ stdout: "done", exitCode: 0 }));
+
+    await invokeCodex("reproduce issue 123", { model: "gpt-5.3-codex-spark" });
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      "/usr/local/bin/codex",
+      ["exec", "--full-auto", "--model", "gpt-5.3-codex-spark", "reproduce issue 123"],
+      expect.objectContaining({ stdio: ["ignore", "pipe", "pipe"] }),
+    );
+  });
+
+  it("passes through an explicit reasoning effort override", async () => {
+    spawnMock.mockReturnValue(fakeProc({ stdout: "done", exitCode: 0 }));
+
+    await invokeCodex("reproduce issue 123", { reasoningEffort: "medium" });
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      "/usr/local/bin/codex",
+      ["exec", "--full-auto", "-c", 'model_reasoning_effort="medium"', "reproduce issue 123"],
+      expect.objectContaining({ stdio: ["ignore", "pipe", "pipe"] }),
+    );
+  });
+
   it("falls back to codex binary when CODEX_BIN is unset", async () => {
     delete process.env.CODEX_BIN;
     spawnMock.mockReturnValue(fakeProc({ stdout: "done", exitCode: 0 }));
@@ -88,5 +112,66 @@ describe("invokeCodex", () => {
 
     await rejection;
     expect(kill).toHaveBeenCalledWith("SIGKILL");
+  });
+
+  it("streams stdout, stderr, and lifecycle events to an observer while buffering output", async () => {
+    const events: Array<
+      | { type: "start"; command: string; args: string[]; cwd?: string }
+      | { type: "stdout"; chunk: string }
+      | { type: "stderr"; chunk: string }
+      | { type: "exit"; exitCode: number | null }
+    > = [];
+
+    spawnMock.mockReturnValue(
+      fakeProc({ stdout: "first line\n", stderr: "warn line\n", exitCode: 0 }),
+    );
+
+    const result = await invokeCodex("reproduce issue 123", {
+      cwd: "/tmp/repo",
+      observer: {
+        onStart(meta) {
+          events.push({ type: "start", ...meta });
+        },
+        onStdout(chunk) {
+          events.push({ type: "stdout", chunk });
+        },
+        onStderr(chunk) {
+          events.push({ type: "stderr", chunk });
+        },
+        onExit(meta) {
+          events.push({ type: "exit", exitCode: meta.exitCode });
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      stdout: "first line\n",
+      stderr: "warn line\n",
+      exitCode: 0,
+    });
+    expect(events).toEqual([
+      {
+        type: "start",
+        command: "/usr/local/bin/codex",
+        args: ["exec", "--full-auto", "reproduce issue 123"],
+        cwd: "/tmp/repo",
+      },
+      { type: "stdout", chunk: "first line\n" },
+      { type: "stderr", chunk: "warn line\n" },
+      { type: "exit", exitCode: 0 },
+    ]);
+  });
+
+  it("rejects with a structured execution error that preserves buffered output", async () => {
+    spawnMock.mockReturnValue(
+      fakeProc({ stdout: "partial output\n", stderr: "boom", exitCode: 1 }),
+    );
+
+    await expect(invokeCodex("hello")).rejects.toMatchObject({
+      name: "CodexExecutionError",
+      exitCode: 1,
+      stdout: "partial output\n",
+      stderr: "boom",
+    });
   });
 });
