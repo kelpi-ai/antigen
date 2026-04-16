@@ -101,6 +101,37 @@ describe("runPrHunter", () => {
     );
   });
 
+  it("streams codex chunks into Inngest-visible logs", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    vi.mocked(invokeCodex)
+      .mockImplementationOnce(async (_prompt, opts) => {
+        opts?.onStdoutChunk?.("planner chunk");
+        opts?.onStderrChunk?.("planner warn");
+        return {
+          stdout: 'P3_PLANNER_JSON {"previewUrl":null,"scenarios":[]}\n',
+          stderr: "",
+          exitCode: 0,
+        };
+      })
+      .mockImplementationOnce(async (_prompt, opts) => {
+        opts?.onStdoutChunk?.("reducer chunk");
+        return {
+          stdout:
+            'P3_REDUCER_JSON {"status":"skipped","prComment":"No preview URL available.","investigationTickets":[]}\n',
+          stderr: "",
+          exitCode: 0,
+        };
+      });
+
+    await runPrHunter({ event: readyEvent, step });
+
+    expect(logSpy).toHaveBeenCalledWith("[planner][stdout] planner chunk");
+    expect(errorSpy).toHaveBeenCalledWith("[planner][stderr] planner warn");
+    expect(logSpy).toHaveBeenCalledWith("[reducer][stdout] reducer chunk");
+  });
+
   it("runs executors and kills Chrome after each run", async () => {
     const runConcurrency = vi.spyOn(policy, "runWithConcurrencyLimit");
     const enforceScenario = vi.spyOn(policy, "ensureExecutableScenario");

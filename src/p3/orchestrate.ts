@@ -29,6 +29,17 @@ interface RunPrHunterInput {
   step?: { run: (...args: any[]) => Promise<any> };
 }
 
+function codexLoggers(phase: string) {
+  return {
+    onStdoutChunk(chunk: string) {
+      console.log(`[${phase}][stdout] ${chunk}`);
+    },
+    onStderrChunk(chunk: string) {
+      console.error(`[${phase}][stderr] ${chunk}`);
+    },
+  };
+}
+
 async function runStep<T>(step: RunPrHunterInput["step"], name: string, fn: () => Promise<T>): Promise<T> {
   if (!step) {
     return fn();
@@ -71,7 +82,10 @@ async function runWithScenario(
             scenario,
             screenshotPath: workspace.screenshotPath,
           }),
-          { cwd: workspace.scenarioDir },
+          {
+            cwd: workspace.scenarioDir,
+            ...codexLoggers(`executor:${scenario.id}`),
+          },
         ),
     );
 
@@ -105,6 +119,7 @@ async function runReducer(
   const result = await runStep(step, "run-reducer", () =>
     invokeCodex(reducerPrompt, {
       cwd: runDir,
+      ...codexLoggers("reducer"),
     }),
   );
 
@@ -161,7 +176,10 @@ export async function runPrHunter({
           event,
           maxScenarios: env.MAX_SCENARIOS_PER_PR,
         }),
-        { cwd: run.runDir },
+        {
+          cwd: run.runDir,
+          ...codexLoggers("planner"),
+        },
       ),
     );
     plannerResult = extractTaggedJson<PlannerResult>(

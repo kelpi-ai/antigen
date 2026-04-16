@@ -54,6 +54,27 @@ describe("invokeCodex", () => {
     expect(result.exitCode).toBe(0);
   });
 
+  it("forwards stdout and stderr to chunk callbacks", async () => {
+    const onStdoutChunk = vi.fn();
+    const onStderrChunk = vi.fn();
+    spawnMock.mockReturnValue(
+      fakeProc({
+        stdout: "first line\nsecond line without newline",
+        stderr: "warn line\n",
+        exitCode: 0,
+      }),
+    );
+
+    await invokeCodex("hello", {
+      onStdoutChunk,
+      onStderrChunk,
+    });
+
+    expect(onStdoutChunk).toHaveBeenCalledWith("first line");
+    expect(onStdoutChunk).toHaveBeenCalledWith("second line without newline");
+    expect(onStderrChunk).toHaveBeenCalledWith("warn line");
+  });
+
   it("rejects with stderr on non-zero exit", async () => {
     spawnMock.mockReturnValue(fakeProc({ stderr: "boom", exitCode: 1 }));
     await expect(invokeCodex("hello")).rejects.toThrow(/codex exited 1.*boom/);
