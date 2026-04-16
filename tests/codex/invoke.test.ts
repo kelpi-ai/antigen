@@ -29,6 +29,8 @@ describe("invokeCodex", () => {
     process.env.CODEX_BIN = "/usr/local/bin/codex";
     process.env.INNGEST_EVENT_KEY = "x";
     process.env.INNGEST_SIGNING_KEY = "x";
+    process.env.GITHUB_WEBHOOK_SECRET = "gh-secret";
+    process.env.CHROME_PATH = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
   });
   afterEach(() => {
     process.env = originalEnv;
