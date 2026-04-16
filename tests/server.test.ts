@@ -6,6 +6,8 @@ describe("server", () => {
     process.env.INNGEST_EVENT_KEY = "test";
     process.env.INNGEST_SIGNING_KEY = "test";
     process.env.CODEX_BIN = "/usr/local/bin/codex";
+    process.env.GITHUB_WEBHOOK_SECRET = "test-secret";
+    process.env.CHROME_PATH = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
   });
 
   it("responds 200 on GET /health", async () => {
@@ -27,5 +29,32 @@ describe("server", () => {
       }),
     );
     expect(body.function_count).toBeGreaterThanOrEqual(1);
+  });
+
+  it("returns 401 for an invalid GitHub webhook signature", async () => {
+    const app = buildApp();
+    const payload = {
+      action: "ready_for_review",
+      number: 123,
+      pull_request: {
+        html_url: "https://github.com/octocat/hello-world/pull/123",
+        head: { sha: "head-sha" },
+        base: { sha: "base-sha" },
+      },
+      repository: {
+        full_name: "octocat/hello-world",
+      },
+    };
+
+    const res = await app.request("/webhooks/github", {
+      method: "POST",
+      headers: {
+        "x-github-event": "pull_request",
+        "x-hub-signature-256": "sha256=invalid",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    expect(res.status).toBe(401);
   });
 });

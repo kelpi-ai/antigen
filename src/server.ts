@@ -5,10 +5,12 @@ import { pathToFileURL } from "node:url";
 import { inngest } from "./inngest/client";
 import { functions } from "./inngest";
 import { env } from "./config/env";
+import { githubWebhookAdapter } from "./webhooks/github";
 
 export function buildApp(): Hono {
   const app = new Hono();
   app.get("/health", (c) => c.json({ ok: true }));
+  app.post("/webhooks/github", githubWebhookAdapter);
   app.on(
     ["GET", "POST", "PUT"],
     "/api/inngest",
