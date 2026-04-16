@@ -1,6 +1,4 @@
-# incident-loop
-
-# Mistakenly put the wrong link: https://docs.google.com/videos/d/1y14Kwfo8kXfCUB-QAdduwCywaDRdf3j3j9ewvEWjghE/edit?usp=sharing - here's the main link!
+# Antigen (Incident Loop)
 
 Orchestrator for the Sentry → Linear → PR incident loop. See
 `docs/superpowers/specs/2026-04-15-incident-loop-design.md`.
