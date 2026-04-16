@@ -2,6 +2,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 
+type FakeChunks = string | string[];
+
+function chunksFrom(value?: FakeChunks): string[] {
+  if (!value) {
+    return [];
+  }
+
+  return Array.isArray(value) ? value : [value];
+}
+
 const spawnMock = vi.fn();
 vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
@@ -9,13 +19,21 @@ vi.mock("node:child_process", () => ({
 
 import { invokeCodex } from "../../src/codex/invoke";
 
-function fakeProc(opts: { stdout?: string; stderr?: string; exitCode: number | null }): ChildProcess {
+function fakeProc(opts: {
+  stdout?: FakeChunks;
+  stderr?: FakeChunks;
+  exitCode: number | null;
+}): ChildProcess {
   const proc = new EventEmitter() as unknown as ChildProcess;
   (proc as unknown as { stdout: EventEmitter }).stdout = new EventEmitter();
   (proc as unknown as { stderr: EventEmitter }).stderr = new EventEmitter();
   setImmediate(() => {
-    if (opts.stdout) (proc as any).stdout.emit("data", Buffer.from(opts.stdout));
-    if (opts.stderr) (proc as any).stderr.emit("data", Buffer.from(opts.stderr));
+    for (const chunk of chunksFrom(opts.stdout)) {
+      (proc as any).stdout.emit("data", Buffer.from(chunk));
+    }
+    for (const chunk of chunksFrom(opts.stderr)) {
+      (proc as any).stderr.emit("data", Buffer.from(chunk));
+    }
     proc.emit("close", opts.exitCode);
   });
   return proc;
@@ -123,7 +141,11 @@ describe("invokeCodex", () => {
     > = [];
 
     spawnMock.mockReturnValue(
-      fakeProc({ stdout: "first line\n", stderr: "warn line\n", exitCode: 0 }),
+      fakeProc({
+        stdout: ["first line\n", "second line\n"],
+        stderr: ["warn line\n", "warn again\n"],
+        exitCode: 0,
+      }),
     );
 
     const result = await invokeCodex("reproduce issue 123", {
@@ -145,8 +167,8 @@ describe("invokeCodex", () => {
     });
 
     expect(result).toEqual({
-      stdout: "first line\n",
-      stderr: "warn line\n",
+      stdout: "first line\nsecond line\n",
+      stderr: "warn line\nwarn again\n",
       exitCode: 0,
     });
     expect(events).toEqual([
@@ -157,9 +179,37 @@ describe("invokeCodex", () => {
         cwd: "/tmp/repo",
       },
       { type: "stdout", chunk: "first line\n" },
+      { type: "stdout", chunk: "second line\n" },
       { type: "stderr", chunk: "warn line\n" },
+      { type: "stderr", chunk: "warn again\n" },
       { type: "exit", exitCode: 0 },
     ]);
+  });
+
+  it("does not emit start if spawn throws", async () => {
+    const events: Array<
+      | { type: "start"; command: string; args: string[]; cwd?: string }
+      | { type: "exit"; exitCode: number | null }
+    > = [];
+
+    spawnMock.mockImplementation(() => {
+      throw new Error("spawn failed");
+    });
+
+    await expect(
+      invokeCodex("hello", {
+        observer: {
+          onStart(meta) {
+            events.push({ type: "start", ...meta });
+          },
+          onExit(meta) {
+            events.push({ type: "exit", exitCode: meta.exitCode });
+          },
+        },
+      }),
+    ).rejects.toThrow("spawn failed");
+
+    expect(events).toEqual([]);
   });
 
   it("rejects with a structured execution error that preserves buffered output", async () => {
@@ -172,6 +222,33 @@ describe("invokeCodex", () => {
       exitCode: 1,
       stdout: "partial output\n",
       stderr: "boom",
+    });
+  });
+
+  it("does not fail when observer callbacks throw", async () => {
+    spawnMock.mockReturnValue(fakeProc({ stdout: "ok\n", stderr: "warn\n", exitCode: 0 }));
+
+    const result = await invokeCodex("hello", {
+      observer: {
+        onStart() {
+          throw new Error("boom start");
+        },
+        onStdout() {
+          throw new Error("boom stdout");
+        },
+        onStderr() {
+          throw new Error("boom stderr");
+        },
+        onExit() {
+          throw new Error("boom exit");
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      stdout: "ok\n",
+      stderr: "warn\n",
+      exitCode: 0,
     });
   });
 });

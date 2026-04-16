@@ -47,26 +47,57 @@ export function invokeCodex(prompt: string, opts: InvokeOpts = {}): Promise<Code
     }
 
     args.push(prompt);
-    opts.observer?.onStart?.({ command: codexBin, args, cwd: opts.cwd });
 
-    const proc = spawn(
-      codexBin,
-      args,
-      { stdio: ["ignore", "pipe", "pipe"], cwd: opts.cwd },
-    );
+    const safeObserver = {
+      onStart(meta: { command: string; args: string[]; cwd?: string }): void {
+        try {
+          opts.observer?.onStart?.(meta);
+        } catch {}
+      },
+      onStdout(chunk: string): void {
+        try {
+          opts.observer?.onStdout?.(chunk);
+        } catch {}
+      },
+      onStderr(chunk: string): void {
+        try {
+          opts.observer?.onStderr?.(chunk);
+        } catch {}
+      },
+      onExit(meta: { exitCode: number | null }): void {
+        try {
+          opts.observer?.onExit?.(meta);
+        } catch {}
+      },
+    };
+
+    let proc;
+
+    try {
+      proc = spawn(
+        codexBin,
+        args,
+        { stdio: ["ignore", "pipe", "pipe"], cwd: opts.cwd },
+      );
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
+    safeObserver.onStart({ command: codexBin, args, cwd: opts.cwd });
 
     let stdout = "";
     let stderr = "";
     proc.stdout?.on("data", (c: Buffer) => {
       const chunk = c.toString();
       stdout += chunk;
-      opts.observer?.onStdout?.(chunk);
+      safeObserver.onStdout(chunk);
     });
 
     proc.stderr?.on("data", (c: Buffer) => {
       const chunk = c.toString();
       stderr += chunk;
-      opts.observer?.onStderr?.(chunk);
+      safeObserver.onStderr(chunk);
     });
 
     const timeout = opts.timeoutMs
@@ -78,7 +109,7 @@ export function invokeCodex(prompt: string, opts: InvokeOpts = {}): Promise<Code
 
     proc.on("close", (code) => {
       if (timeout) clearTimeout(timeout);
-      opts.observer?.onExit?.({ exitCode: code });
+      safeObserver.onExit({ exitCode: code });
 
       if (code === 0) {
         resolve({ stdout, stderr, exitCode: 0 });
