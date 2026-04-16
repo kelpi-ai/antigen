@@ -47,6 +47,24 @@ describe("selectTopScenarios", () => {
       "medium",
     ]);
   });
+
+  it("returns an empty list for non-positive max scenarios", () => {
+    const scenarios: HuntScenario[] = [
+      {
+        id: "s1",
+        summary: "s1",
+        rationale: "r1",
+        targetArea: "checkout",
+        risk: "high",
+        mode: "read_safe",
+        guardrails: [],
+        expectedEvidence: ["finalUrl"],
+      },
+    ];
+
+    expect(selectTopScenarios(scenarios, 0)).toEqual([]);
+    expect(selectTopScenarios(scenarios, -1)).toEqual([]);
+  });
 });
 
 describe("ensureExecutableScenario", () => {
@@ -101,5 +119,17 @@ describe("runWithConcurrencyLimit", () => {
     );
 
     expect(results).toEqual([3, 1, 2]);
+  });
+
+  it("rejects non-positive limits", async () => {
+    await expect(() =>
+      runWithConcurrencyLimit(
+        [1, 2, 3],
+        0,
+        async (value) => {
+          return value;
+        },
+      ),
+    ).rejects.toThrow(/greater than 0/);
   });
 });

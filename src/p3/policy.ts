@@ -10,6 +10,10 @@ export function selectTopScenarios(
   scenarios: HuntScenario[],
   maxScenarios: number,
 ): HuntScenario[] {
+  if (maxScenarios <= 0) {
+    return [];
+  }
+
   return [...scenarios].sort((a, b) => RISK_ORDER[a.risk] - RISK_ORDER[b.risk]).slice(0, maxScenarios);
 }
 
@@ -29,6 +33,10 @@ export async function runWithConcurrencyLimit<T, R>(
   limit: number,
   worker: (item: T, index: number) => Promise<R>,
 ): Promise<R[]> {
+  if (limit <= 0) {
+    throw new Error("Concurrency limit must be greater than 0");
+  }
+
   const results: R[] = new Array(items.length);
   let cursor = 0;
 
