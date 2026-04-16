@@ -25,6 +25,7 @@ Plan and execute with strict red-green:
 1) Reproduce and implement a failing red test.
 2) Implement a green fix.
 3) Add regression guard and prove it in the final evidence.
+4) Before claiming success, run a final automated end-to-end validation against target app URL ${input.targetAppUrl} and include proof in the final result.
 If reproduction is unclear, use systematic-debugging to narrow down assumptions before editing.
 
 If this is a browser-visible bug, verify with browser runs against the provided URL and include browserVerificationEvidence.

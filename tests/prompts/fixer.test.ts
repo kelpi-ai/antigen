@@ -30,6 +30,7 @@ describe("buildFixerPrompt", () => {
     });
 
     expect(prompt).toContain("red-green");
+    expect(prompt).toContain("end-to-end");
     expect(prompt).toContain("regression guard");
     expect(prompt).toContain("GitHub MCP");
     expect(prompt).toContain("systematic-debugging");
@@ -55,5 +56,6 @@ describe("buildFixerPrompt", () => {
     expect(prompt).toContain("accessibility tree diff");
     expect(prompt).toContain("commit and push");
     expect(prompt).toContain("open a draft PR");
+    expect(prompt).toContain("final automated end-to-end validation");
   });
 });
