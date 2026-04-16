@@ -7,7 +7,7 @@ vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 
-import { refreshPersistentCheckout } from "../../src/git/updateCheckout";
+import { updateCheckout } from "../../src/git/updateCheckout";
 
 function fakeProc(opts: { stdout?: string; stderr?: string; exitCode: number | null }) {
   const proc = new EventEmitter() as unknown as ChildProcess & {
@@ -56,7 +56,7 @@ describe("updateCheckout", () => {
       .mockReturnValueOnce(fakeProc({ exitCode: 0 }))
       .mockReturnValueOnce(fakeProc({ exitCode: 0 }));
 
-    await refreshPersistentCheckout();
+    await updateCheckout();
 
     expect(spawnMock).toHaveBeenCalledTimes(3);
     expect(spawnMock).toHaveBeenNthCalledWith(
@@ -84,7 +84,7 @@ describe("updateCheckout", () => {
       fakeProc({ exitCode: 1, stderr: "fatal: not a git repository (or any of the parent directories): .git" }),
     );
 
-    await expect(refreshPersistentCheckout()).rejects.toThrow(
+    await expect(updateCheckout()).rejects.toThrow(
       /git rev-parse --is-inside-work-tree.*not a git repository/,
     );
     expect(spawnMock).toHaveBeenCalledTimes(1);
@@ -97,7 +97,7 @@ describe("updateCheckout", () => {
         fakeProc({ exitCode: 1, stderr: "fatal: no remote 'origin' specified" }),
       );
 
-    await expect(refreshPersistentCheckout()).rejects.toThrow(
+    await expect(updateCheckout()).rejects.toThrow(
       /git fetch origin.*no remote/,
     );
     expect(spawnMock).toHaveBeenCalledTimes(2);

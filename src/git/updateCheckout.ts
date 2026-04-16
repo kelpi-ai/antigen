@@ -41,7 +41,7 @@ function runGit(args: string[]): Promise<GitResult> {
   });
 }
 
-export async function refreshPersistentCheckout(): Promise<void> {
+export async function updateCheckout(): Promise<void> {
   await runGit(["rev-parse", "--is-inside-work-tree"]);
   await runGit(["fetch", env.TARGET_REPO_REMOTE]);
   await runGit(["pull", "--ff-only", env.TARGET_REPO_REMOTE, env.TARGET_REPO_BASE_BRANCH]);
