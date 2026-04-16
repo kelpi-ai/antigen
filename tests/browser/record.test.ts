@@ -12,15 +12,26 @@ vi.mock("node:child_process", async () => {
 
 import { startBrowserRecording } from "../../src/browser/record";
 
-function fakeFfmpegProcess(): EventEmitter & {
-  stdin: { write: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> };
-} {
-  const ffmpeg = new EventEmitter() as EventEmitter & {
-    stdin: { write: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> };
+type MockFfmpegProcess = EventEmitter & {
+  stdin: EventEmitter & {
+    write: ReturnType<typeof vi.fn>;
+    end: ReturnType<typeof vi.fn>;
   };
+  kill: ReturnType<typeof vi.fn>;
+};
+
+function fakeFfmpegProcess(): MockFfmpegProcess {
+  const ffmpeg = new EventEmitter() as MockFfmpegProcess;
+  const stdin = new EventEmitter() as MockFfmpegProcess["stdin"];
+
+  stdin.write = vi.fn();
+  stdin.end = vi.fn();
+  ffmpeg.kill = vi.fn();
+
   ffmpeg.stdin = {
-    write: vi.fn(),
-    end: vi.fn(),
+    ...stdin,
+    write: stdin.write,
+    end: stdin.end,
   };
   return ffmpeg;
 }
@@ -95,6 +106,9 @@ describe("startBrowserRecording", () => {
     CDPMock.mockResolvedValue(client);
 
     const ffmpeg = fakeFfmpegProcess();
+    ffmpeg.stdin.end.mockImplementation(() => {
+      ffmpeg.emit("close", 0, null);
+    });
     spawnMock.mockReturnValue(ffmpeg);
 
     const recording = await startBrowserRecording({
@@ -106,6 +120,149 @@ describe("startBrowserRecording", () => {
     await recording.stop();
 
     expect(page.stopScreencast).toHaveBeenCalledTimes(1);
+    expect(ffmpeg.stdin.end).toHaveBeenCalledTimes(1);
+    expect(client.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for ffmpeg to finish before stop() resolves", async () => {
+    const page = {
+      startScreencast: vi.fn(),
+      stopScreencast: vi.fn(),
+      screencastFrameAck: vi.fn(),
+      screencastFrame: vi.fn(),
+    };
+    const client = { Page: page, Runtime: { enable: vi.fn() }, close: vi.fn() };
+    CDPMock.mockResolvedValue(client);
+
+    const ffmpeg = fakeFfmpegProcess();
+    spawnMock.mockReturnValue(ffmpeg);
+
+    const recording = await startBrowserRecording({
+      port: 9222,
+      outputPath: "/tmp/browser.mp4",
+      ffmpegBin: "/opt/homebrew/bin/ffmpeg",
+    });
+
+    let settled = false;
+    const stopPromise = recording.stop().finally(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    ffmpeg.emit("close", 0, null);
+    await stopPromise;
+    expect(settled).toBe(true);
+  });
+
+  it("rolls back ffmpeg and CDP client when startScreencast rejects", async () => {
+    const unsubscribe = vi.fn();
+    const page = {
+      startScreencast: vi.fn().mockRejectedValue(new Error("start failed")),
+      stopScreencast: vi.fn(),
+      screencastFrameAck: vi.fn(),
+      screencastFrame: vi.fn(() => unsubscribe),
+    };
+    const client = { Page: page, Runtime: { enable: vi.fn() }, close: vi.fn() };
+    CDPMock.mockResolvedValue(client);
+
+    const ffmpeg = fakeFfmpegProcess();
+    ffmpeg.stdin.end.mockImplementation(() => {
+      ffmpeg.emit("close", 0, null);
+    });
+    spawnMock.mockReturnValue(ffmpeg);
+
+    await expect(
+      startBrowserRecording({
+        port: 9222,
+        outputPath: "/tmp/browser.mp4",
+        ffmpegBin: "/opt/homebrew/bin/ffmpeg",
+      }),
+    ).rejects.toThrow(/start failed/);
+
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(ffmpeg.stdin.end).toHaveBeenCalledTimes(1);
+    expect(client.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls unsubscribe callback on stop()", async () => {
+    const unsubscribe = vi.fn();
+    const page = {
+      startScreencast: vi.fn(),
+      stopScreencast: vi.fn(),
+      screencastFrameAck: vi.fn(),
+      screencastFrame: vi.fn(() => unsubscribe),
+    };
+    const client = { Page: page, Runtime: { enable: vi.fn() }, close: vi.fn() };
+    CDPMock.mockResolvedValue(client);
+
+    const ffmpeg = fakeFfmpegProcess();
+    ffmpeg.stdin.end.mockImplementation(() => {
+      ffmpeg.emit("close", 0, null);
+    });
+    spawnMock.mockReturnValue(ffmpeg);
+
+    const recording = await startBrowserRecording({
+      port: 9222,
+      outputPath: "/tmp/browser.mp4",
+      ffmpegBin: "/opt/homebrew/bin/ffmpeg",
+    });
+
+    await recording.stop();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it("continues stop cleanup if stopScreencast rejects", async () => {
+    const unsubscribe = vi.fn();
+    const page = {
+      startScreencast: vi.fn(),
+      stopScreencast: vi.fn().mockRejectedValue(new Error("stop failed")),
+      screencastFrameAck: vi.fn(),
+      screencastFrame: vi.fn(() => unsubscribe),
+    };
+    const client = { Page: page, Runtime: { enable: vi.fn() }, close: vi.fn() };
+    CDPMock.mockResolvedValue(client);
+
+    const ffmpeg = fakeFfmpegProcess();
+    ffmpeg.stdin.end.mockImplementation(() => {
+      ffmpeg.emit("close", 0, null);
+    });
+    spawnMock.mockReturnValue(ffmpeg);
+
+    const recording = await startBrowserRecording({
+      port: 9222,
+      outputPath: "/tmp/browser.mp4",
+      ffmpegBin: "/opt/homebrew/bin/ffmpeg",
+    });
+
+    await expect(recording.stop()).rejects.toThrow(/stop failed/);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(ffmpeg.stdin.end).toHaveBeenCalledTimes(1);
+    expect(client.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects startup when ffmpeg emits an error", async () => {
+    const page = {
+      startScreencast: vi.fn(() => new Promise<void>(() => {})),
+      stopScreencast: vi.fn(),
+      screencastFrameAck: vi.fn(),
+      screencastFrame: vi.fn(),
+    };
+    const client = { Page: page, Runtime: { enable: vi.fn() }, close: vi.fn() };
+    CDPMock.mockResolvedValue(client);
+
+    const ffmpeg = fakeFfmpegProcess();
+    spawnMock.mockReturnValue(ffmpeg);
+
+    const startupPromise = startBrowserRecording({
+      port: 9222,
+      outputPath: "/tmp/browser.mp4",
+      ffmpegBin: "/opt/homebrew/bin/ffmpeg",
+    });
+    await Promise.resolve();
+    ffmpeg.emit("error", new Error("ffmpeg crashed"));
+
+    await expect(startupPromise).rejects.toThrow(/ffmpeg crashed/);
     expect(ffmpeg.stdin.end).toHaveBeenCalledTimes(1);
     expect(client.close).toHaveBeenCalledTimes(1);
   });
