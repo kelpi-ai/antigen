@@ -19,11 +19,17 @@ Orchestrator for the Sentry → Linear → PR incident loop. See
 
 P3 needs these environment variables in `.env`:
 
-- `GITHUB_WEBHOOK_SECRET` — webhook signature key used by `POST /webhooks/github`.
-- `CHROME_PATH` — absolute path to your Chrome binary.
-- `ARTIFACTS_DIR` — root folder for P3 run artifacts.
-- `MAX_SCENARIOS_PER_PR` — cap on planner-to-executor scenario handoff.
-- `P3_EXECUTOR_CONCURRENCY` — max executor parallelism per PR.
+- Base runtime:
+  - `INNGEST_EVENT_KEY`
+  - `INNGEST_SIGNING_KEY`
+  - `CODEX_BIN`
+  - `PORT` (default: `3000`)
+- P3-specific:
+  - `GITHUB_WEBHOOK_SECRET`
+  - `CHROME_PATH`
+  - `ARTIFACTS_DIR`
+  - `MAX_SCENARIOS_PER_PR`
+  - `P3_EXECUTOR_CONCURRENCY`
 
 Prerequisites:
 
@@ -47,11 +53,11 @@ Per-scenario folders are under `.incident-loop-artifacts/p3/<runId>/scenarios/<s
    - Terminal B: `pnpm dev`
 2. Run the P3-focused automated check:
    - `pnpm test -- tests/e2e/p3Hunter.test.ts`
-3. Send a signed GitHub `ready_for_review` webhook to `http://localhost:3000/webhooks/github`:
+3. Send a signed GitHub `ready_for_review` webhook to `http://localhost:${PORT:-3000}/webhooks/github`:
    - Create payload:
      - `BODY='{"action":"ready_for_review","number":123,"pull_request":{"html_url":"https://github.com/acme/shop/pull/123","head":{"sha":"HEAD_SHA"},"base":{"sha":"BASE_SHA"}},"repository":{"full_name":"acme/shop"}}'`
    - Sign payload:
      - `SIG=$(node -e 'const { createHmac } = require("node:crypto"); process.stdout.write("sha256=" + createHmac("sha256", process.env.GITHUB_WEBHOOK_SECRET).update(process.argv[1]).digest("hex"));' "$BODY")`
    - Post it:
-     - `curl -i http://localhost:3000/webhooks/github -H 'content-type: application/json' -H "x-github-event: pull_request" -H "x-hub-signature-256: $SIG" --data "$BODY"`
+   - `curl -i "http://localhost:${PORT:-3000}/webhooks/github" -H 'content-type: application/json' -H "x-github-event: pull_request" -H "x-hub-signature-256: $SIG" --data "$BODY"`
 4. Confirm `github/pr.ready_for_review` appears in Inngest and inspect output artifacts under `.incident-loop-artifacts/p3/<runId>/`.
